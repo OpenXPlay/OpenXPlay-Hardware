@@ -1,3 +1,5 @@
+<p align="center"><b>English</b> · <a href="README-zh.md">简体中文</a></p>
+
 # UFI003
 
 Support files for the UFI003 msm8916 4G USB dongle running the OpenStick Debian 11 image (kernel `5.15.0-handsomekernel+`, aarch64) as an OpenXPlay relay.
