@@ -1,0 +1,3 @@
+b248a4bfdb667fbaa6abda41f07b99e388ddd81b99b77ab519b971d287813a96  btqcomsmd.ko
+48bbd293fbc79bd329fb3128644e32bad9eee9ff3eaf72467d15e55146016151  btqcomsmd-fix-command-timeout-after-setting-bd-address.patch
+66577a95df23eb648124ec7b0f38b5f5d88d067e0893d7ef129d507e93ce90d5  src/btqcomsmd.c
