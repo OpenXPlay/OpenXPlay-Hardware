@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 OpenXPlay.org
-# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
 # Created by riko chen on 2026-10-16
 # Package version sha256; dependency order for the stock bullseye image.
 libasound2-data 1.2.4-1.1 76211f5f201ad1069b95d047863e0c1b51d8400c874b59e00f24f31f972b4036

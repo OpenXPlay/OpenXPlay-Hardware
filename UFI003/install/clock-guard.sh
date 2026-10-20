@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-FileCopyrightText: 2026 OpenXPlay.org
-# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
 # Created by riko chen on 2026-10-16
 # Best-effort maintenance never waits for synchronization; cap local commands at 2 s.
 (

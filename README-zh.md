@@ -14,8 +14,10 @@
 
 ## 许可证
 
-本项目采用 [GNU Affero General Public License v3.0 (AGPLv3)](./LICENSE) 授权，仅限第 3 版。
+OpenXPlay-Hardware 支持运行 [OpenStick](https://github.com/OpenStick/OpenStick) 的设备，并沿用它的条款：完全开源，但是禁止商用。本项目采用 [OpenXPlay-Hardware License 1.0](./LICENSE)（许可证文本为英文），并增加一条：分发本项目或其衍生品的人，必须以同一许可证公开完整源代码。商用行为包括：
 
-取自 Linux 内核或由其构建的文件保留原有许可证，即 [GNU General Public License v2.0](./LICENSE-GPL-2.0)，仅限第 2 版；各设备目录中列有这些文件。
+- 售卖包含本项目文件的系统镜像、安装包或整合包，或它们的衍生品；
+- 将构建产物收费发布；
+- 批量或大规模售卖装有本项目文件的设备。
 
-如果贵组织的政策不允许使用 AGPLv3 许可的软件，或你希望免于履行 AGPLv3 的开源义务，请联系：[support@openxplay.org](mailto:support@openxplay.org)
+取自 Linux 内核或由其构建的文件保留原有许可证，即 [GNU General Public License v2.0](./LICENSE-GPL-2.0)，仅限第 2 版；各设备目录中列有这些文件。与本项目文件一起安装的其他软件（例如 OpenXPlay 中继和 Debian 软件包）保留各自的许可证。

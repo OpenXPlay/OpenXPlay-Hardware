@@ -1,6 +1,6 @@
 # OpenXPlay-Hardware Individual Contributor License Agreement
 
-Version 1.0
+Version 1.1
 
 This agreement is between you and riko chen (the "Maintainer"), who maintains OpenXPlay-Hardware
 (the "Project") under the name OpenXPlay.org. It sets out the terms under which the Maintainer
@@ -26,8 +26,7 @@ derivative works of, publicly display, publicly perform, sublicense and distribu
 Contributions and such derivative works.
 
 This license includes the right to license your Contributions, alone or as part of the Project,
-under any terms the Maintainer chooses, including the GNU Affero General Public License v3.0 and
-terms that grant exemptions from its obligations.
+under any terms the Maintainer chooses, including the OpenXPlay-Hardware License.
 
 ## 3. Patent license
 

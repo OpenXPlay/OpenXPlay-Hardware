@@ -63,4 +63,4 @@ sh /path/to/ufi003-bundle/UFI003/install/install-ufi003.sh /path/to/ufi003-bundl
 
 ## 许可证
 
-`bluetooth/` 与本仓库其余部分一样采用 AGPL-3.0-only。`rfcomm/` 和 `btqcomsmd/` 中的全部内容都属于 Linux 内核模块，沿用内核的许可证 [GPL-2.0-only](../LICENSE-GPL-2.0)，包括：模块本身、模块源码（Linux v5.15 `net/bluetooth/rfcomm`；`btqcomsmd` 为 Linux v5.15 `drivers/bluetooth/btqcomsmd.c` 及随附补丁）、设备的内核配置和 `Module.symvers`，以及控制模块编译的 `build.sh` 脚本。完整内核源码为 kernel.org 提供的 `linux-5.15.tar.xz`（SHA-256 `57b2cf6991910e3b67a1b3490022e8a0674b6965c74c12da1e99d138d1991ee8`）。
+`bluetooth/` 与本仓库其余部分一样采用 [OpenXPlay-Hardware License](../LICENSE)。`rfcomm/` 和 `btqcomsmd/` 中的全部内容都属于 Linux 内核模块，沿用内核的许可证 [GPL-2.0-only](../LICENSE-GPL-2.0)，包括：模块本身、模块源码（Linux v5.15 `net/bluetooth/rfcomm`；`btqcomsmd` 为 Linux v5.15 `drivers/bluetooth/btqcomsmd.c` 及随附补丁）、设备的内核配置和 `Module.symvers`，以及控制模块编译的 `build.sh` 脚本。完整内核源码为 kernel.org 提供的 `linux-5.15.tar.xz`（SHA-256 `57b2cf6991910e3b67a1b3490022e8a0674b6965c74c12da1e99d138d1991ee8`）。
