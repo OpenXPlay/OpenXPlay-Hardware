@@ -1,0 +1,7 @@
+{
+  "model": "UFI003",
+  "wifiInterface": "wlan0",
+  "bluetoothAdapter": "hci0",
+  "hotspotDownGapSeconds": 15,
+  "secureConnections": "pairing-off"
+}
