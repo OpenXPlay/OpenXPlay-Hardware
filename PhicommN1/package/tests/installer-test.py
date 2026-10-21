@@ -105,6 +105,19 @@ elif cmd == "dpkg-query":
     if value is None: sys.exit(1)
     print((value["status"] + " " + value["version"]) if isinstance(value, dict)
           else "install ok installed " + value, end="")
+elif cmd == "apt-get":
+    assert args[:7] == ["-s", "--no-install-recommends", "-o", "Dir::Etc::SourceList=/dev/null",
+                        "-o", "Dir::Etc::SourceParts=/dev/null", "install"], args
+    assert args[7:] and all(pathlib.Path(path).is_absolute() and pathlib.Path(path).is_file()
+                           and path.endswith(".deb") for path in args[7:]), args
+    print("Reading package lists... Done")
+    if os.environ.get("TEST_APT_FAIL"):
+        print("The following packages have unmet dependencies:")
+        print(" libnftables1 : Depends: libnftnl11 (>= 1.2.6) but it is not installable")
+        print("               Depends: libxtables12 but it is not installable")
+        print(" dnsmasq-base : Depends: libnftnl11 but it is not going to be installed")
+        print("E: Unable to correct problems, you have held broken packages.", file=sys.stderr)
+        sys.exit(100)
 elif cmd == "dpkg":
     if args == ["--print-architecture"]:
         print(os.environ.get("TEST_ARCH", "arm64"))
@@ -115,8 +128,6 @@ elif cmd == "dpkg":
     elif args == ["--audit"]:
         print(os.environ.get("TEST_AUDIT", ""), end="")
     elif "-i" in args:
-        if "--no-act" in args:
-            sys.exit(int(os.environ.get("TEST_DRY_FAIL", "0")))
         if os.environ.get("TEST_DPKG_FAIL"): sys.exit(1)
         assert args[:3] == ["--force-confdef", "--force-confold", "-i"]
         for path in args[3:]:
@@ -136,11 +147,11 @@ elif cmd == "modprobe":
     sys.exit(int(os.environ.get("TEST_RFCOMM_FAIL", "0")))
 else: raise AssertionError(cmd)
 '''
-    for cmd in ("id", "uname", "df", "dpkg-deb", "dpkg-query", "dpkg", "systemctl", "modprobe"):
+    for cmd in ("id", "uname", "df", "dpkg-deb", "dpkg-query", "apt-get", "dpkg", "systemctl", "modprobe"):
         path = bins / cmd
         path.write_text(f"#!{sys.executable}\n" + stub)
         path.chmod(0o755)
-    # The installer itself has only POSIX/core utilities, with no Python, jq, apt or network tools.
+    # Only fake package/device commands and POSIX/core utilities are available to the installer.
     runtime = work / "runtime"
     runtime.mkdir()
     for cmd in ("sh", "dirname", "awk", "sha256sum", "find", "sort", "cmp", "tr", "grep", "sed", "wc"):
@@ -151,19 +162,22 @@ else: raise AssertionError(cmd)
                FIXTURES=str(fixture_script), FIXTURE_LIB=str(fixture_script.parent),
                OPENXPLAY_N1_ROOT=str(root), TEST_LOG=str(log), TEST_STATE=str(state))
 
-    def run(script, args=(), code=0, error=None, extra=None, device=False):
+    def run(script, args=(), code=0, error=None, extra=None, device=False, stderr_lines=()):
         e = {**env, **(extra or {})}
         if device:
             e["PATH"] = str(bins) + os.pathsep + str(runtime)
         result = subprocess.run(["sh", str(script), *map(str, args)], env=e, text=True,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=40)
-        check(result.returncode == code, f"Unexpected exit {result.returncode}: {result.stdout}")
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=40)
+        output = result.stdout + result.stderr
+        check(result.returncode == code, f"Unexpected exit {result.returncode}: {output}")
         if error:
-            check(error in result.stdout, result.stdout)
+            check(error in output, output)
+        for line in stderr_lines:
+            check(line in result.stderr.splitlines() and line not in result.stdout.splitlines(), output)
         if device:
             prefix = "OXP-STAGE device " + ("wrong-device:" if code == 2 else "failed:" if code else "")
-            check(result.stdout.splitlines()[-1].startswith(prefix), result.stdout)
-        return result.stdout
+            check(output.splitlines()[-1].startswith(prefix), output)
+        return output
 
     pins = source / "install/debs.txt"
     rows = []
@@ -214,7 +228,10 @@ else: raise AssertionError(cmd)
         return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
     def installs():
-        return [call for call in calls() if call[0] == "dpkg" and "-i" in call and "--no-act" not in call]
+        return [call for call in calls() if call[0] == "dpkg" and "-i" in call]
+
+    def simulations():
+        return [call for call in calls() if call[0] == "apt-get"]
 
     def snapshot(path):
         return {str(p.relative_to(path)): p.read_bytes() for p in path.rglob("*") if p.is_file()}
@@ -223,7 +240,8 @@ else: raise AssertionError(cmd)
     run(installer, ["--dry-run", bundle], device=True)
     check(before == (snapshot(root), snapshot(bundle), state.read_bytes()), "Dry run changes nothing")
     check(not installs(), "Dry run does not install")
-    check(any("--no-act" in call for call in calls()), "Dry-run dependency check")
+    check(simulations()[-1][8:] == [str(bundle / package["file"]) for package in manifest["packages"]],
+          "Dry run solves exactly the absolute bundle paths in install order")
     for value in (b"Other Board\0", b"Phicomm N1 Plus\0", b"phicomm n1\0", b""):
         model.write_bytes(value)
         run(installer, ["--dry-run", bundle], code=2, error="expected Phicomm N1", device=True)
@@ -238,10 +256,25 @@ else: raise AssertionError(cmd)
     run(installer, [bundle], code=1, error="unexpected installer error", extra={"TEST_CONTROL_FAIL": "1"}, device=True)
     run(installer, [bundle], code=1, error="run as root", extra={"TEST_UID": "1000"}, device=True)
     run(installer, [bundle], code=1, error="KiB free", extra={"TEST_FREE": "100"}, device=True)
-    run(installer, ["--dry-run", bundle], code=1, error="dependency check failed",
-        extra={"TEST_DRY_FAIL": "1"}, device=True)
+    missing = "OXP-STAGE device failed: missing dependencies: libnftnl11 libxtables12"
+    for args in (["--dry-run", bundle], [bundle]):
+        output = run(installer, args, code=1, error=missing, extra={"TEST_APT_FAIL": "1"}, device=True,
+                     stderr_lines=(" libnftables1 : Depends: libnftnl11 (>= 1.2.6) but it is not installable",
+                                   "               Depends: libxtables12 but it is not installable",
+                                   " dnsmasq-base : Depends: libnftnl11 but it is not going to be installed",
+                                   "E: Unable to correct problems, you have held broken packages.", missing))
+        check(output.splitlines()[-1] == missing, "Final failure lists missing dependencies once")
+        check("Reading package lists" not in output, "Only relevant solver diagnostics are printed")
+        check(not installs(), "Unmet dependencies prevent every dpkg -i call")
+        check(before == (snapshot(root), snapshot(bundle), state.read_bytes()), "Solver failure changes nothing")
+    apt_get = bins / "apt-get"
+    apt_get.rename(bins / "disabled-apt-get")
+    for args in (["--dry-run", bundle], [bundle]):
+        run(installer, args, code=1, error="missing command: apt-get", device=True)
+    (bins / "disabled-apt-get").rename(apt_get)
     check(not installs(), "Preflight failures change no packages")
     run(installer, [bundle], device=True)
+    check(simulations()[-1][8:] == installs()[-1][4:], "Install solves exactly the packages passed to dpkg")
     actual = [Path(path).name.split("_")[0] for path in installs()[-1][4:]]
     check(actual == expected_packages, "Dependency order, device last")
     count = len(installs())
@@ -253,6 +286,7 @@ else: raise AssertionError(cmd)
     run(installer, [bundle], device=True)
     actual = [Path(path).name.split("_")[0] for path in installs()[-1][4:]]
     check(actual == ["z-runtime-data"], "Only older installed pins upgraded; prerelease/epoch never downgraded")
+    check(simulations()[-1][8:] == installs()[-1][4:], "Solver respects installed newer versions")
     installed = json.loads(state.read_text())
     installed["a-runtime-lib"] = {"status": "install ok unpacked", "version": "3.0"}
     state.write_text(json.dumps(installed))

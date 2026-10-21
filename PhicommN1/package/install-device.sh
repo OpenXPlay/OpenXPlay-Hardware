@@ -57,7 +57,7 @@ host_profile_ok() {
 }
 
 [ "$(id -u)" -eq 0 ] || fail 'run as root'
-for c in dpkg dpkg-deb dpkg-query sha256sum awk df find sort cmp tr grep sed; do
+for c in dpkg dpkg-deb dpkg-query apt-get sha256sum awk df find sort cmp tr grep sed; do
     command -v "$c" >/dev/null || fail "missing command: $c"
 done
 [ "$(dpkg --print-architecture)" = arm64 ] || wrong 'requires Debian arm64'
@@ -189,8 +189,21 @@ fi
 
 free=$(df -Pk "${root:-/}" | awk 'NR == 2 {print $4}')
 [ "${free:-0}" -ge 65536 ] || fail "only ${free:-0} KiB free on /"
+if [ "$#" -gt 0 ]; then
+    # Solve against installed packages and these files only, before any package changes.
+    if ! solver=$(apt-get -s --no-install-recommends -o Dir::Etc::SourceList=/dev/null \
+        -o Dir::Etc::SourceParts=/dev/null install "$@" 2>&1); then
+        printf '%s\n' "$solver" | grep -E 'Depends:|^E:' >&2 || :
+        missing=$(printf '%s\n' "$solver" | awk '
+            /Depends:/ {
+                sub(/^.*Depends:[ \t]*/, "")
+                if (!seen[$1]++) { printf "%s%s", sep, $1; sep = " " }
+            }
+            END { print "" }')
+        fail "missing dependencies: ${missing:-unknown (see apt errors above)}"
+    fi
+fi
 if [ "$mode" = dry ]; then
-    if [ "$#" -gt 0 ]; then dpkg --no-act -i "$@" >/dev/null || fail 'dpkg dependency check failed (bundle must be complete offline)'; fi
     echo "OXP-STAGE device preflight-ok version=$device_version"
     exit 0
 fi

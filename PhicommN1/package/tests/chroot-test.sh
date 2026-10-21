@@ -80,6 +80,43 @@ EOF
     dpkg -i "/work/$pkg.deb" >/dev/null
 done
 
+# An incomplete pinned runtime must fail in apt before dpkg can unpack either package.
+source=/work/missing-dependency-source
+inputs=/work/missing-dependency-debs
+mkdir -p "$source" "$inputs" /work/pinned-runtime/DEBIAN
+cp -rf /work/PhicommN1 "$source/"
+cp -f /work/LICENSE "$source/LICENSE"
+cat > /work/pinned-runtime/DEBIAN/control <<'EOF'
+Package: oxp-test-pinned-runtime
+Version: 1.0
+Architecture: all
+Depends: oxp-test-missing-dependency
+Maintainer: Test <test@example.invalid>
+Description: Pinned fixture with a dependency absent from the offline bundle
+EOF
+deb=$inputs/oxp-test-pinned-runtime_1.0_all.deb
+dpkg-deb --root-owner-group -b /work/pinned-runtime "$deb" >/dev/null
+printf 'oxp-test-pinned-runtime 1.0 %s\n' "$(sha256sum "$deb" | cut -d' ' -f1)" > "$source/PhicommN1/install/debs.txt"
+sh "$source/PhicommN1/package/build-bundle.sh" "$inputs" /work/bundles >/work/bundle.log 2>&1 || {
+    cat /work/bundle.log; exit 1;
+}
+bundle=/work/bundles/openxplay-phicomm-n1-device-0.1.0
+check 'missing dependency is not installed' sh -c '! dpkg-query -W -f="\${Status}" oxp-test-missing-dependency 2>/dev/null | grep -qx "install ok installed"'
+check 'missing dependency is not bundled' sh -c '! find "$1/debs" -name "oxp-test-missing-dependency_*.deb" | grep .' sh "$bundle"
+status_before=$(sha256sum /var/lib/dpkg/status)
+for mode in dry install; do
+    set -- "$bundle"
+    if [ "$mode" = dry ]; then set -- --dry-run "$@"; fi
+    rc=0
+    sh "$bundle/install-device.sh" "$@" > "/work/$mode-preflight.log" 2>&1 || rc=$?
+    check "$mode exits with dependency failure" test "$rc" -eq 1
+    check "$mode reports the missing dependency" grep -qx \
+        'OXP-STAGE device failed: missing dependencies: oxp-test-missing-dependency' "/work/$mode-preflight.log"
+    check "$mode changes no dpkg state" test "$(sha256sum /var/lib/dpkg/status)" = "$status_before"
+    check "$mode leaves no iU packages" sh -c '! dpkg-query -W -f="\${db:Status-Abbrev}\n" | grep -q "^iU"'
+    check "$mode leaves dpkg audit clean" sh -c '[ -z "$(dpkg --audit)" ]'
+done
+
 # Recreate the manual installation documented in the N1 README.
 mkdir -p /usr/local/libexec /etc/systemd/system/serial-getty@ttyGS0.service.d \
     /etc/systemd/system/multi-user.target.wants
