@@ -30,5 +30,7 @@ jobs:
           path: OpenXPlay-Relay
       - name: Check shell syntax
         run: find . -name '*.sh' -not -path './.git/*' -print0 | xargs -0 -n 1 sh -n
+      - name: Test device release logic (offline)
+        run: python3 UFI003/package/tests/release-test.py
       - name: Test
         run: sh UFI003/install/tests/run.sh
