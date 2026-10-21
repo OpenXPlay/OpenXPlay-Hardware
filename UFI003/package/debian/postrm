@@ -1,0 +1,34 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 OpenXPlay.org
+# SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
+# Created by riko chen on 2026-10-19
+set -e
+# Remove 0.1.0's generic policies; preserve local edits as inactive .dpkg-bak files.
+# 0.2.0~ also covers pre-releases, and older packages can restore their conffiles on downgrade.
+for conffile in /etc/NetworkManager/conf.d/openxplay-wifi-powersave.conf \
+    /etc/NetworkManager/conf.d/openxplay-wifi-scan-mac.conf; do
+    dpkg-maintscript-helper rm_conffile "$conffile" 0.2.0~ openxplay-ufi003 -- "$@"
+done
+krel=5.15.0-handsomekernel+
+unit=openxplay-bt-guard.service
+state=/var/lib/openxplay-ufi003
+case "$1" in
+remove|purge)
+    if [ -d "/lib/modules/$krel" ]; then depmod -a "$krel" || :; fi
+    if [ -d /run/systemd/system ]; then systemctl --system daemon-reload >/dev/null || :; fi
+    ;;
+esac
+if [ "$1" = remove ] && [ -x /usr/bin/deb-systemd-helper ]; then
+    deb-systemd-helper mask "$unit" >/dev/null || :
+fi
+if [ "$1" = purge ]; then
+    if [ -x /usr/bin/deb-systemd-helper ]; then
+        deb-systemd-helper purge "$unit" >/dev/null || :
+        deb-systemd-helper unmask "$unit" >/dev/null || :
+    fi
+    if [ -e "$state/dnsmasq-was-enabled" ]; then
+        systemctl enable dnsmasq.service >/dev/null 2>&1 || :
+    fi
+    rm -rf "$state"
+fi
+exit 0

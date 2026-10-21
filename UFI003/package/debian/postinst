@@ -1,0 +1,58 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 OpenXPlay.org
+# SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
+# Created by riko chen on 2026-10-19
+set -e
+# Remove 0.1.0's generic policies; preserve local edits as inactive .dpkg-bak files.
+# 0.2.0~ also covers pre-releases, and older packages can restore their conffiles on downgrade.
+for conffile in /etc/NetworkManager/conf.d/openxplay-wifi-powersave.conf \
+    /etc/NetworkManager/conf.d/openxplay-wifi-scan-mac.conf; do
+    dpkg-maintscript-helper rm_conffile "$conffile" 0.2.0~ openxplay-ufi003 -- "$@"
+done
+krel=5.15.0-handsomekernel+
+unit=openxplay-bt-guard.service
+state=/var/lib/openxplay-ufi003
+# Runtime actions only on a booted system, never in an image build or chroot.
+live() { [ -d /run/systemd/system ]; }
+case "$1" in
+configure|abort-upgrade|abort-deconfigure|abort-remove)
+    if [ -d "/lib/modules/$krel" ]; then depmod -a "$krel"; fi
+    # Same logic as dh_installsystemd: enable on first install, keep the admin's choice on upgrade.
+    deb-systemd-helper unmask "$unit" >/dev/null || :
+    if deb-systemd-helper --quiet was-enabled "$unit"; then
+        deb-systemd-helper enable "$unit" >/dev/null || :
+    else
+        deb-systemd-helper update-state "$unit" >/dev/null || :
+    fi
+    # Enable time synchronisation on this device without an RTC.
+    if [ -e /lib/systemd/system/systemd-timesyncd.service ]; then
+        systemctl enable systemd-timesyncd.service >/dev/null 2>&1 || :
+    fi
+    # The OpenStick image runs a system dnsmasq for the USB network (listen-address=192.168.68.1).
+    # NetworkManager's shared USB profile already serves DHCP and DNS there; the system instance
+    # either holds the DHCP port that the relay's hotspot needs or, bound to its interface, fails at
+    # boot before usb0 has its address. Disable it once, and re-enable it on purge.
+    if [ "$1" = configure ] && [ -z "$2" ] && [ -f /etc/dnsmasq.conf ] &&
+        grep -Eq '^[[:space:]]*listen-address=192\.168\.68\.1([[:space:],#]|$)' /etc/dnsmasq.conf &&
+        systemctl is-enabled dnsmasq.service >/dev/null 2>&1; then
+        systemctl disable dnsmasq.service >/dev/null 2>&1 || :
+        mkdir -p "$state"
+        : > "$state/dnsmasq-was-enabled"
+        if live; then systemctl stop dnsmasq.service >/dev/null 2>&1 || :; fi
+        echo 'openxplay-ufi003: disabled the system dnsmasq; NetworkManager serves the USB network.'
+    fi
+    if live; then
+        systemctl --system daemon-reload >/dev/null || :
+        modprobe rfcomm || :
+        if command -v nmcli >/dev/null 2>&1; then nmcli general reload >/dev/null 2>&1 || :; fi
+        # Restart the guard before BlueZ so an older guard never acts on the restarted adapter;
+        # restarting BlueZ registers the RFCOMM profiles now that the module is loaded.
+        deb-systemd-invoke restart "$unit" >/dev/null || :
+        deb-systemd-invoke try-restart bluetooth.service >/dev/null || :
+    fi
+    if [ "$1" = configure ]; then
+        echo 'openxplay-ufi003: reboot to load the fixed Bluetooth driver and use the UFI003 host profile.'
+    fi
+    ;;
+esac
+exit 0
