@@ -1,0 +1,49 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 OpenXPlay.org
+# SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
+# Created by riko chen on 2026-10-19
+set -e
+# Remove 0.1.0's generic policies; preserve local edits as inactive .dpkg-bak files.
+# 0.2.0~ also covers pre-releases, and older packages can restore their conffiles on downgrade.
+for conffile in /etc/NetworkManager/conf.d/openxplay-wifi-powersave.conf \
+    /etc/NetworkManager/conf.d/openxplay-wifi-scan-mac.conf; do
+    dpkg-maintscript-helper rm_conffile "$conffile" 0.2.0~ openxplay-ufi003 -- "$@"
+done
+krel=5.15.0-handsomekernel+
+owned() { dpkg-query -S "$1" >/dev/null 2>&1; }
+case "$1" in
+install|upgrade)
+    # The modules are built for exactly this kernel; any other base would load nothing or fail.
+    if [ ! -d "/lib/modules/$krel/kernel" ] && [ "${OPENXPLAY_UFI003_FORCE:-}" != 1 ]; then
+        echo "openxplay-ufi003: /lib/modules/$krel not found; this package is only for the UFI003 OpenStick base." >&2
+        exit 1
+    fi
+    # Earlier releases installed these by hand or with install-ufi003.sh. Configuration files at the
+    # package's own paths are removed so that dpkg does not ask about them (their content is what
+    # this package ships); units and scripts at the old paths would shadow or duplicate the new ones.
+    for f in \
+        /etc/modules-load.d/openxplay-rfcomm.conf \
+        /etc/NetworkManager/conf.d/openxplay-wifi-powersave.conf \
+        /etc/NetworkManager/conf.d/openxplay-wifi-scan-mac.conf \
+        /etc/dnsmasq.d/openxplay-bind.conf \
+        /etc/systemd/system/openxplay-bt-guard.service \
+        /usr/local/libexec/openxplay-bt-guard \
+        /usr/local/libexec/openxplay-clock-guard \
+        /etc/systemd/system/openxplay-relay.service.d/clock.conf \
+        /etc/systemd/system/bluetooth.service.d/openxplay-no-secure-connections.conf
+    do
+        if { [ -e "$f" ] || [ -L "$f" ]; } && ! owned "$f"; then
+            echo "openxplay-ufi003: replacing hand-installed $f"
+            rm -f "$f"
+        fi
+    done
+    rmdir /etc/systemd/system/bluetooth.service.d 2>/dev/null || :
+    rmdir /etc/systemd/system/openxplay-relay.service.d 2>/dev/null || :
+    # The old enable link points at the removed /etc unit; postinst enables the packaged unit.
+    link=/etc/systemd/system/multi-user.target.wants/openxplay-bt-guard.service
+    if [ -L "$link" ] && [ "$(readlink "$link")" = /etc/systemd/system/openxplay-bt-guard.service ]; then
+        rm -f "$link"
+    fi
+    ;;
+esac
+exit 0
