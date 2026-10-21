@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 OpenXPlay.org
+# SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
+# Created by riko chen on 2026-10-21
+# DHCP for the computer on the USB management link. Sends no router and no DNS server, so the
+# computer keeps its own default route, and binds only to usb0, so other dnsmasq instances
+# (NetworkManager's shared mode) keep working.
+[Unit]
+Description=OpenXPlay DHCP on the USB management link
+BindsTo=openxplay-usb-gadget.service
+After=openxplay-usb-gadget.service
+
+[Service]
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/dev/null --port=0 --interface=usb0 --bind-dynamic --dhcp-authoritative --dhcp-range=192.168.201.2,192.168.201.9,255.255.255.0,12h --dhcp-option=3 --dhcp-option=6 --dhcp-leasefile=/run/openxplay-usb-dhcp.leases --pid-file=/run/openxplay-usb-dhcp.pid
+Restart=on-failure
+RestartSec=5

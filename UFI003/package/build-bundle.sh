@@ -125,7 +125,7 @@ json() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
     printf '%s  %s\n' "$(sum "$f")" "$f"
 done > SHA256SUMS)
 find "$root" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} + 2>/dev/null ||
-    find "$root" -exec touch -h -t "$(date -u -r "$SOURCE_DATE_EPOCH" +%Y%m%d%H%M.%S)" {} +
+    TZ=UTC0 find "$root" -exec touch -h -t "$(date -u -r "$SOURCE_DATE_EPOCH" +%Y%m%d%H%M.%S)" {} +
 rm -rf "${out:?}/$name" "$out/$name.tar.gz"
 mv "$root" "$out/$name"
 # Deterministic archive: sorted names, fixed owner and times, no gzip timestamp.

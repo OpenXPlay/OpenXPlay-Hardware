@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 OpenXPlay.org
+# SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
+# Created by riko chen on 2026-10-21
+# Package version sha256; dependency order for the fresh ophub Debian 13 arm64 server image.
+# Measured on Armbian_26.11.0_amlogic_s905d_trixie_6.12.112_server_2026.10.15 (Debian 13.7):
+# the closure of the device and relay packages' Depends that the image lacks, without Recommends.
+libnftables1 1.1.3-1 260b0790a8f567ef27d293e15c722d867de113d579c330be17d13354cd61c356
+dnsmasq-base 2.91-1+deb13u2 9dd677936f718aeb7afc30d064c7116a7057257f94a522e5ce22f36d1834e5e4
+bluez 5.82-1.1 be1d24dd87fd6cd1b45431cd517bf103fffec026aee42fbeab3533633b546ac4

@@ -32,5 +32,13 @@ jobs:
         run: find . -name '*.sh' -not -path './.git/*' -print0 | xargs -0 -n 1 sh -n
       - name: Test device release logic (offline)
         run: python3 UFI003/package/tests/release-test.py
+      - name: Test device profiles
+        run: |
+          python3 UFI003/package/tests/profile-test.py
+          python3 PhicommN1/package/tests/profile-test.py
+      - name: Test Phicomm N1 bundle and installer (offline)
+        run: python3 PhicommN1/package/tests/installer-test.py
+      - name: Test Phicomm N1 package in trixie arm64 (offline, if cached)
+        run: sh PhicommN1/package/tests/chroot-test.sh
       - name: Test
         run: sh UFI003/install/tests/run.sh

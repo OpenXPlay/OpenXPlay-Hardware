@@ -8,10 +8,14 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
+import sys
 import tarfile
 import tempfile
+import textwrap
 
+sys.dont_write_bytecode = True
 helper = Path(__file__).resolve().parents[1] / "release-common.sh"
 checks = 0
 
@@ -109,13 +113,15 @@ with tempfile.TemporaryDirectory(prefix="ufi003 release ") as tmp:
     stub.mkdir()
     curl = stub / "curl"
     curl.write_text('''#!/usr/bin/env python3
-import json, os, pathlib, sys
+import base64, json, os, pathlib, sys
 args = sys.argv[1:]
 out = pathlib.Path(args[args.index("--output") + 1])
 url = args[-1]
 with open(os.environ["FETCH_LOG"], "a") as log:
     log.write(url + "\\n")
 data = os.environ["FETCH_DATA"].encode()
+if os.environ.get("FETCH_BASE64"):
+    data = base64.b64decode(os.environ["FETCH_BASE64"])
 if os.environ.get("FETCH_CORRUPT"):
     data = b"wrong digest"
 mode = os.environ["FETCH_MODE"]
@@ -126,7 +132,7 @@ if url.startswith("https://archive.debian.org/"):
 elif "/mr/binary/" in url:
     out.write_text(json.dumps({"result": [
         {"architecture": "amd64", "hash": "a" * 40},
-        {"architecture": "arm64", "hash": "b" * 40}]}))
+        {"architecture": os.environ.get("FETCH_ARCH", "arm64"), "hash": "b" * 40}]}))
 elif url == "https://snapshot.debian.org/file/" + "b" * 40:
     out.write_bytes(data)
 else:
@@ -171,5 +177,109 @@ else:
     run('ufi003_fetch_debs "$@"', pins, debs, env={**env, "FETCH_CORRUPT": "1"},
         ok=False, error="SHA-256 mismatch")
     assert len(log.read_text().splitlines()) == 1, "Digest mismatches must not try another mirror"
+    curl_script = curl.read_text()
+
+# N1 reuses the version/archive checks and fetches arbitrary arm64/all binaries by control data.
+version_command = 'device_release_version phicomm-n1 "$@"; printf "%s %s %s\\n" "$RELEASE_VERSION" "$DEBVERSION" "$PRERELEASE"'
+for version, debversion, prerelease in (("0.1.0", "0.1.0", "false"),
+                                       ("0.1.0-beta.1", "0.1.0~beta.1", "true")):
+    assert run(version_command, "push", "refs/tags/phicomm-n1-device-v" + version, sha).strip() == \
+        f"{version} {debversion} {prerelease}"
+for ref in ("refs/tags/ufi003-device-v0.1.0", "refs/heads/phicomm-n1-device-v0.1.0",
+            "refs/tags/phicomm-n1-device-v01.2.3", "refs/tags/phicomm-n1-device-v1.2.3+build"):
+    run(version_command, "push", ref, sha, ok=False)
+assert run(version_command, "workflow_dispatch", "refs/heads/phicomm-n1-device", sha).strip() == \
+    "0.0.0~dev.0123456 0.0.0~dev.0123456 false"
+
+with tempfile.TemporaryDirectory(prefix="n1 release ") as tmp:
+    import base64
+    root = Path(tmp)
+    version = "0.1.0~beta.1"
+    name = "openxplay-phicomm-n1-device-" + version
+    bundle = root / (name + ".tar.gz")
+    manifest = {"schema": "org.openxplay.flash-stage/1", "stage": "device", "device": "phicomm-n1",
+                "version": version, "transport": "ssh", "requires": {"debianVersion": "13",
+                "deviceTreeModel": "Phicomm N1", "dpkgArchitecture": "arm64"}}
+    # archive() closes over the current bundle/name/manifest, sharing the UFI003 corruption cases.
+    archive()
+    run('device_check_bundle phicomm-n1 "$@"', version, root)
+    archive(corrupt=True)
+    run('device_check_bundle phicomm-n1 "$@"', version, root, ok=False, error="SHA256SUMS check failed")
+    for changed in ({**manifest, "transport": "adb"}, {**manifest, "device": "ufi003"},
+                    {**manifest, "requires": {**manifest["requires"], "kernelRelease": "6.12.112-ophub"}},
+                    *({**manifest, "requires": {**manifest["requires"], key: "wrong"}}
+                      for key in manifest["requires"])):
+        archive(changed_manifest=changed)
+        run('device_check_bundle phicomm-n1 "$@"', version, root, ok=False, error="Invalid bundle manifest")
+    archive(extra=(name + "/private/key.pk8",))
+    run('device_check_bundle phicomm-n1 "$@"', version, root, ok=False, error="forbidden identity path")
+    stub = root / "bin"
+    stub.mkdir()
+    (stub / "curl").write_text(curl_script)
+    (stub / "curl").chmod(0o755)
+    fixture_lib = helper.parents[2] / "PhicommN1/package/tests"
+    sys.path.insert(0, str(fixture_lib))
+    from fixtures import deb
+    # Read actual test archive control fields; filename and API architecture are not trusted.
+    dpkg_deb = stub / "dpkg-deb"
+    dpkg_deb.write_text(f'''#!{sys.executable}
+import sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, {str(fixture_lib)!r})
+from fixtures import fields
+assert sys.argv[1] == "-f"
+print(fields(sys.argv[2]).get(sys.argv[3], ""))
+''')
+    dpkg_deb.chmod(0o755)
+    pins = root / "debs.txt"
+    debs = root / "debs"
+    log = root / "fetch.log"
+    env = dict(os.environ, PATH=str(stub) + os.pathsep + os.environ["PATH"], FETCH_LOG=str(log),
+               FETCH_DATA="", FETCH_MODE="snapshot")
+    pins.write_text("# Package version sha256\n")
+    run('phicomm_n1_fetch_debs "$@"', pins, debs, env=env)
+    assert not log.exists() and not list(debs.iterdir()), "Empty pins must not download"
+    for arch in ("arm64", "all"):
+        pkg, ver = "arbitrary-runtime-" + arch, "1:2.3+deb13u1"
+        fixture = root / "fixture.deb"
+        deb(fixture, pkg, ver, arch)
+        digest = hashlib.sha256(fixture.read_bytes()).hexdigest()
+        pins.write_text(f"{pkg} {ver} {digest}")  # No final newline is valid.
+        encoded = base64.b64encode(fixture.read_bytes()).decode()
+        fetch_env = {**env, "FETCH_ARCH": arch, "FETCH_BASE64": encoded}
+        if log.exists():
+            log.unlink()
+        run('phicomm_n1_fetch_debs "$@"', pins, debs, env=fetch_env)
+        assert (debs / f"{pkg}_2.3+deb13u1_{arch}.deb").read_bytes() == fixture.read_bytes()
+        assert len(log.read_text().splitlines()) == 2
+        assert "/1%3A2.3%2Bdeb13u1/binfiles" in log.read_text()
+        run('phicomm_n1_fetch_debs "$@"', pins, debs, env={**fetch_env, "FETCH_CORRUPT": "1"},
+            ok=False, error="SHA-256 mismatch")
+        deb(fixture, "wrong-package", ver, arch)
+        pins.write_text(f"{pkg} {ver} {hashlib.sha256(fixture.read_bytes()).hexdigest()}\n")
+        run('phicomm_n1_fetch_debs "$@"', pins, debs,
+            env={**fetch_env, "FETCH_BASE64": base64.b64encode(fixture.read_bytes()).decode()},
+            ok=False, error="Control metadata")
+    pins.write_text("bad 1 placeholder\n")
+    run('phicomm_n1_fetch_debs "$@"', pins, debs, env=env, ok=False, error="Invalid debs.txt row")
+
+# Inspect both workflows offline, including all shell blocks and prerelease asset naming.
+for device, build_dir, version_fn, fetch_fn, check_fn in (
+    ("ufi003", "UFI003", "ufi003_release_version", "ufi003_fetch_debs", "ufi003_check_bundle"),
+    ("phicomm-n1", "PhicommN1", "device_release_version phicomm-n1", "phicomm_n1_fetch_debs",
+     "device_check_bundle phicomm-n1"),
+):
+    workflow = (helper.parents[2] / f".github/workflows/release-{device}-device.yml").read_text()
+    for expected in (f"tags: ['{device}-device-v*']", ". UFI003/package/release-common.sh",
+                     version_fn, f'{fetch_fn} {build_dir}/install/debs.txt',
+                     f'sh {build_dir}/package/build-bundle.sh --version "$DEBVERSION"', check_fn,
+                     f'asset="openxplay-{device}-device-$VERSION.tar.gz"',
+                     'sha256sum -c SHA256SUMS', 'sha256sum "$asset" > SHA256SUMS',
+                     '--verify-tag', '--notes-file "$notes"', '--latest=false', 'contents: write'):
+        assert expected in workflow, (device, expected)
+        checks += 1
+    for block in re.findall(r"        run: \|\n((?:          .*\n|\n)+)", workflow):
+        subprocess.run(["bash", "-n"], input=textwrap.dedent(block), text=True, check=True)
+        checks += 1
 
 print(f"PASS {checks} offline release cases")

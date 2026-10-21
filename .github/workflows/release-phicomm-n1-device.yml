@@ -1,0 +1,120 @@
+# SPDX-FileCopyrightText: 2026 OpenXPlay.org
+# SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
+# Created by riko chen on 2026-10-21
+
+name: Release Phicomm N1 device
+
+on:
+  push:
+    tags: ['phicomm-n1-device-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      debversion: ${{ steps.version.outputs.debversion }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Derive version and reproducible timestamp
+        id: version
+        run: |
+          . UFI003/package/release-common.sh
+          device_release_version phicomm-n1 "$GITHUB_EVENT_NAME" "$GITHUB_REF" "$GITHUB_SHA"
+          {
+            printf 'version=%s\n' "$RELEASE_VERSION"
+            printf 'debversion=%s\n' "$DEBVERSION"
+            printf 'prerelease=%s\n' "$PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
+          printf 'SOURCE_DATE_EPOCH=%s\n' "$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+      - name: Ensure native Debian packaging tools
+        run: |
+          if ! command -v dpkg-deb >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends dpkg-dev fakeroot
+          fi
+      - name: Fetch and verify pinned Debian binaries
+        run: |
+          . UFI003/package/release-common.sh
+          phicomm_n1_fetch_debs PhicommN1/install/debs.txt "$RUNNER_TEMP/debs"
+      - name: Build bundle
+        env:
+          DEBVERSION: ${{ steps.version.outputs.debversion }}
+        run: |
+          sh PhicommN1/package/build-bundle.sh --version "$DEBVERSION" "$RUNNER_TEMP/debs" "$RUNNER_TEMP/dist"
+      - name: Check bundle and checksum release files
+        env:
+          DEBVERSION: ${{ steps.version.outputs.debversion }}
+        run: |
+          . UFI003/package/release-common.sh
+          device_check_bundle phicomm-n1 "$DEBVERSION" "$RUNNER_TEMP/dist"
+          # Manual runs retain the same release files, including the outer checksum file.
+          cd "$RUNNER_TEMP/dist"
+          sha256sum "openxplay-phicomm-n1-device-$DEBVERSION.tar.gz" > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phicomm-n1-device-release
+          path: |
+            ${{ runner.temp }}/dist/*.tar.gz
+            ${{ runner.temp }}/dist/SHA256SUMS
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/phicomm-n1-device-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: phicomm-n1-device-release
+          path: ${{ runner.temp }}/release
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+          DEBVERSION: ${{ needs.build.outputs.debversion }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+        run: |
+          bundle="openxplay-phicomm-n1-device-$DEBVERSION.tar.gz"
+          # GitHub renames release assets with "~" in their names, so the asset uses the release
+          # version (0.1.0-beta.1); the bundle inside keeps its Debian version.
+          asset="openxplay-phicomm-n1-device-$VERSION.tar.gz"
+          notes="$RUNNER_TEMP/release-notes.md"
+          {
+            if [ "$(git cat-file -t "refs/tags/$TAG")" = tag ]; then
+              git for-each-ref --format='%(contents)' "refs/tags/$TAG" |
+                sed '/^-----BEGIN .*SIGNATURE-----$/,$d; /^-----BEGIN SIGNED MESSAGE-----$/,$d'
+            fi
+            printf '\nBuilt from OpenXPlay-Hardware@%s\n\n' "$(git rev-parse HEAD)"
+            printf -- '- `%s`\n' "$asset" SHA256SUMS
+            printf '\nThe bundle carries unmodified Debian 13 packages whose sources are named in SOURCES.txt. OpenXPlay-Hardware is under the OpenXPlay-Hardware License 1.0 (no commercial use).\n'
+          } > "$notes"
+          cd "$RUNNER_TEMP/release"
+          sha256sum -c SHA256SUMS || { echo '::error::Release artifact checksum mismatch'; exit 1; }
+          [ "$asset" = "$bundle" ] || mv "$bundle" "$asset"
+          sha256sum "$asset" > SHA256SUMS
+          flags=()
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "$TAG" "$asset" SHA256SUMS \
+            --verify-tag --title "OpenXPlay Phicomm N1 device support $VERSION" \
+            --notes-file "$notes" --latest=false "${flags[@]}"

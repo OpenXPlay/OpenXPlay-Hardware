@@ -7,6 +7,7 @@ Device support for running the OpenXPlay relay on specific hardware.
 | Directory | Device |
 | --- | --- |
 | [`UFI003`](./UFI003) | UFI003 msm8916 4G USB dongle with the OpenStick Debian 11 image |
+| [`PhicommN1`](./PhicommN1) | Phicomm N1 TV box (Amlogic S905D) with ophub Armbian |
 
 ## Contributing
 

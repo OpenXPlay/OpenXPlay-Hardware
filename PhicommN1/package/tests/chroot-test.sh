@@ -1,0 +1,140 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 OpenXPlay.org
+# SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
+# Created by riko chen on 2026-10-21
+# Real dpkg lifecycle in a disposable cached Debian trixie arm64 container. No pulls or network.
+# Missing runtime dependencies use empty test packages; this tests packaging, not their behavior.
+set -eu
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ "${1:-}" != --inside ]; then
+    [ "$#" -eq 0 ] || { echo "Usage: $0" >&2; exit 2; }
+    if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+        echo 'SKIP N1 chroot: Docker is unavailable'
+        exit 0
+    fi
+    if ! docker image inspect debian:trixie >/dev/null 2>&1; then
+        echo 'SKIP N1 chroot: debian:trixie is not cached (offline test never pulls)'
+        exit 0
+    fi
+    if ! docker run --rm --pull=never --network=none --platform linux/arm64 debian:trixie \
+        sh -c '[ "$(dpkg --print-architecture)" = arm64 ]' >/dev/null 2>&1; then
+        echo 'SKIP N1 chroot: cached trixie image cannot run as arm64'
+        exit 0
+    fi
+    repo=$(CDPATH= cd -- "$here/../../.." && pwd)
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' 0
+    trap 'exit 1' HUP INT TERM
+    sh "$here/../build-deb.sh" "$work/debs"
+    COPYFILE_DISABLE=1 tar --no-xattrs -cf "$work/test.tar" -C "$repo" LICENSE PhicommN1
+    tar -rf "$work/test.tar" -C "$work" debs
+    docker run -i --rm --pull=never --network=none --platform linux/arm64 \
+        -e OPENXPLAY_N1_CHROOT_TEST=1 debian:trixie \
+        sh -c 'mkdir /work && tar -xf - -C /work && sh /work/PhicommN1/package/tests/chroot-test.sh --inside' < "$work/test.tar"
+    exit 0
+fi
+[ "${OPENXPLAY_N1_CHROOT_TEST:-}" = 1 ] && [ -d /work/debs ] || {
+    echo '--inside is only for the disposable test container' >&2; exit 2;
+}
+[ "$(id -u)" -eq 0 ] && [ "$(dpkg --print-architecture)" = arm64 ] || exit 2
+os=$( . /etc/os-release; printf '%s:%s' "$ID" "$VERSION_ID" )
+[ "$os" = debian:13 ] || { echo 'Needs Debian trixie arm64' >&2; exit 2; }
+export LC_ALL=C DEBIAN_FRONTEND=noninteractive
+pass=0
+check() {
+    title=$1; shift
+    "$@" || { echo "FAIL $title" >&2; exit 1; }
+    echo "PASS $title"
+    pass=$((pass + 1))
+}
+fixture=/work/device
+mkdir -p "$fixture/etc" "$fixture/proc/device-tree"
+cp -f /etc/os-release "$fixture/etc/os-release"
+printf 'Phicomm N1\000' > "$fixture/proc/device-tree/model"
+export OPENXPLAY_N1_ROOT=$fixture
+preinst=$here/../debian/preinst
+printf 'Other Board\000' > "$fixture/proc/device-tree/model"
+if sh "$preinst" install >/work/wrong.log 2>&1; then echo 'FAIL wrong model accepted'; exit 1; fi
+check 'package rejects wrong model' grep -q 'requires device-tree model Phicomm N1' /work/wrong.log
+printf 'Phicomm N1\000' > "$fixture/proc/device-tree/model"
+printf 'ID=debian\nVERSION_ID=12\n' > "$fixture/etc/os-release"
+if sh "$preinst" install >/work/wrong.log 2>&1; then echo 'FAIL wrong OS accepted'; exit 1; fi
+check 'package rejects wrong Debian version' grep -q 'requires Debian 13' /work/wrong.log
+cp -f /etc/os-release "$fixture/etc/os-release"
+
+# A plain Debian image lacks the N1's runtime packages. Resolve only absent direct dependencies
+# with explicit fixtures, preserving real init-system-helpers for enable/disable/purge checks.
+for pkg in bluez iw network-manager dnsmasq-base kmod; do
+    if dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -qx 'install ok installed'; then continue; fi
+    echo "Fixture dependency (no runtime payload): $pkg"
+    ctl=/work/dependency-$pkg/DEBIAN
+    mkdir -p "$ctl"
+    cat > "$ctl/control" <<EOF
+Package: $pkg
+Version: 999:1.0
+Architecture: all
+Maintainer: Test <test@example.invalid>
+Description: Empty dependency fixture for offline N1 packaging tests
+EOF
+    dpkg-deb --root-owner-group -b "/work/dependency-$pkg" "/work/$pkg.deb" >/dev/null
+    dpkg -i "/work/$pkg.deb" >/dev/null
+done
+
+# Recreate the manual installation documented in the N1 README.
+mkdir -p /usr/local/libexec /etc/systemd/system/serial-getty@ttyGS0.service.d \
+    /etc/systemd/system/multi-user.target.wants
+cp -f "$here/../../usb-gadget/usb-gadget.sh" /usr/local/libexec/openxplay-usb-gadget
+cp -f "$here/../../usb-gadget/"*.service /etc/systemd/system/
+cp -f "$here/../../usb-gadget/serial-getty-ttyGS0.conf" \
+    /etc/systemd/system/serial-getty@ttyGS0.service.d/openxplay-usb-gadget.conf
+ln -s /etc/systemd/system/openxplay-usb-gadget.service \
+    /etc/systemd/system/multi-user.target.wants/openxplay-usb-gadget.service
+printf '[Service]\nNice=1\n' > /etc/systemd/system/serial-getty@ttyGS0.service.d/owner.conf
+dpkg -i /work/debs/openxplay-phicomm-n1_*_all.deb >/work/install.log 2>&1 || { cat /work/install.log; exit 1; }
+check 'package installed' sh -c '[ "$(dpkg-query -W -f="\${Status} \${Version}" openxplay-phicomm-n1)" = "install ok installed 0.1.0" ]'
+check 'package files unmodified' sh -c '[ -z "$(dpkg -V openxplay-phicomm-n1)" ]'
+check 'dpkg audit clean' sh -c '[ -z "$(dpkg --audit)" ]'
+check 'host profile conffile' sh -c 'dpkg-query -W -f="\${Conffiles}" openxplay-phicomm-n1 | grep -q /etc/openxplay/host.json'
+check 'host profile bytes' cmp /etc/openxplay/host.json "$here/../../host.json"
+check 'gadget script bytes unchanged' cmp /usr/lib/openxplay-phicomm-n1/usb-gadget "$here/../../usb-gadget/usb-gadget.sh"
+check 'gadget executable' test -x /usr/lib/openxplay-phicomm-n1/usb-gadget
+check 'DHCP unit unchanged' cmp /usr/lib/systemd/system/openxplay-usb-dhcp.service "$here/../../usb-gadget/openxplay-usb-dhcp.service"
+check 'getty ordering unchanged' cmp /usr/lib/systemd/system/serial-getty@ttyGS0.service.d/openxplay-usb-gadget.conf "$here/../../usb-gadget/serial-getty-ttyGS0.conf"
+check 'packaged ExecStart' grep -qx 'ExecStart=/usr/lib/openxplay-phicomm-n1/usb-gadget start' /usr/lib/systemd/system/openxplay-usb-gadget.service
+check 'gadget enabled without a running systemd' test -L /etc/systemd/system/multi-user.target.wants/openxplay-usb-gadget.service
+check 'enable link points to vendor unit' sh -c '[ "$(readlink -f /etc/systemd/system/multi-user.target.wants/openxplay-usb-gadget.service)" = /usr/lib/systemd/system/openxplay-usb-gadget.service ]'
+check 'manual script removed' test ! -e /usr/local/libexec/openxplay-usb-gadget
+check 'manual shadow unit removed' test ! -e /etc/systemd/system/openxplay-usb-gadget.service
+check 'owner getty drop-in preserved' test -f /etc/systemd/system/serial-getty@ttyGS0.service.d/owner.conf
+
+# A container may expose /run/systemd/system without any UDC. Simulate a failed start and ensure
+# postinst still configures successfully; no real systemctl or modprobe can run here.
+mkdir -p /work/bin /run/systemd/system
+cat > /work/bin/systemctl <<'EOF'
+#!/bin/sh
+echo "systemctl $*" >> /work/runtime.log
+exit 0
+EOF
+cat > /work/bin/deb-systemd-invoke <<'EOF'
+#!/bin/sh
+echo "deb-systemd-invoke $*" >> /work/runtime.log
+[ "$1" != restart ]
+EOF
+chmod 0755 /work/bin/*
+check 'postinst tolerates absent UDC with systemd running' env PATH="/work/bin:$PATH" DPKG_MAINTSCRIPT_PACKAGE=openxplay-phicomm-n1 sh "$here/../debian/postinst" configure 0.1.0
+check 'live postinst attempts gadget start' grep -qx 'deb-systemd-invoke restart openxplay-usb-gadget.service' /work/runtime.log
+check 'live postinst starts Bluetooth' grep -qx 'deb-systemd-invoke start bluetooth.service' /work/runtime.log
+echo '# owner edit' >> /etc/openxplay/host.json
+PATH="/work/bin:$PATH" dpkg --force-confdef --force-confold -i /work/debs/openxplay-phicomm-n1_*_all.deb >/dev/null 2>&1
+check 'local conffile edit preserved' grep -qx '# owner edit' /etc/openxplay/host.json
+PATH="/work/bin:$PATH" dpkg -r openxplay-phicomm-n1 >/dev/null 2>&1
+check 'prerm stops gadget' grep -qx 'deb-systemd-invoke stop openxplay-usb-gadget.service' /work/runtime.log
+check 'prerm disables gadget' test ! -L /etc/systemd/system/multi-user.target.wants/openxplay-usb-gadget.service
+check 'package payload removed' test ! -e /usr/lib/openxplay-phicomm-n1/usb-gadget
+check 'conffile kept on remove' test -f /etc/openxplay/host.json
+PATH="/work/bin:$PATH" dpkg --purge openxplay-phicomm-n1 >/dev/null 2>&1
+check 'conffile removed on purge' test ! -e /etc/openxplay/host.json
+check 'vendor getty drop-in removed on purge' test ! -e /usr/lib/systemd/system/serial-getty@ttyGS0.service.d/openxplay-usb-gadget.conf
+check 'owner getty drop-in survives purge' test -f /etc/systemd/system/serial-getty@ttyGS0.service.d/owner.conf
+check 'helper state removed on purge' sh -c '! find /var/lib/systemd -name "*openxplay-usb-gadget*" | grep .'
+echo "PASS $pass N1 trixie arm64 package lifecycle checks (offline dependency fixtures)"
