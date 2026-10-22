@@ -136,10 +136,6 @@ elif cmd == "dpkg":
         state.write_text(json.dumps(installed))
     else: raise AssertionError(args)
 elif cmd == "systemctl":
-    if args == ["is-enabled", "openxplay-usb-gadget.service"]:
-        value = os.environ.get("TEST_GADGET", "enabled")
-        print(value)
-        sys.exit(0 if value == "enabled" else 1)
     assert args == ["is-active", "--quiet", "bluetooth.service"], args
     sys.exit(int(os.environ.get("TEST_BLUETOOTH_FAIL", "0")))
 elif cmd == "modprobe":
@@ -304,8 +300,7 @@ else: raise AssertionError(cmd)
     state.write_text(json.dumps(installed))
     for kernel in ("6.12.112-ophub", "6.12.113-ophub", "6.18.1-ophub"):
         run(installer, ["--verify", bundle], extra={"TEST_KERNEL": kernel}, device=True)
-    for extra, error in (({"TEST_GADGET": "disabled"}, "not enabled"),
-                         ({"TEST_BLUETOOTH_FAIL": "1"}, "bluetooth.service is not active"),
+    for extra, error in (({"TEST_BLUETOOTH_FAIL": "1"}, "bluetooth.service is not active"),
                          ({"TEST_RFCOMM_FAIL": "1"}, "lacks usable RFCOMM")):
         run(installer, ["--verify", bundle], code=1, error=error, extra=extra, device=True)
     profile = root / "etc/openxplay/host.json"

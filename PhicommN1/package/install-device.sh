@@ -162,12 +162,6 @@ if [ "$mode" = verify ]; then
         host_profile_ok "$root/etc/openxplay/host.json" || { echo 'FAIL Phicomm N1 host profile'; return 1; }
         echo 'ok   Phicomm N1 host profile'
     }
-    gadget_ok() {
-        [ "$(systemctl is-enabled openxplay-usb-gadget.service 2>/dev/null)" = enabled ] || {
-            echo 'FAIL USB gadget service is not enabled'; return 1;
-        }
-        echo 'ok   USB gadget enabled'
-    }
     bluetooth_ok() {
         systemctl is-active --quiet bluetooth.service || { echo 'FAIL bluetooth.service is not active'; return 1; }
         echo 'ok   bluetooth.service active'
@@ -179,7 +173,6 @@ if [ "$mode" = verify ]; then
     for c in systemctl modprobe; do command -v "$c" >/dev/null || fail "missing command: $c"; done
     check package_ok
     check profile_ok
-    check gadget_ok
     check bluetooth_ok
     check rfcomm_ok
     [ "$bad" -eq 0 ] || fail "$bad verification check(s) failed"

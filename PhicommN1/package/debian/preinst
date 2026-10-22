@@ -14,28 +14,6 @@ install|upgrade)
     [ "$os" = debian:13 ] || fail "requires Debian 13; found $os"
     model=$(tr -d '\000' < "$root/proc/device-tree/model" 2>/dev/null) || model=
     [ "$model" = 'Phicomm N1' ] || fail "requires device-tree model Phicomm N1; found ${model:-unknown}"
-    # Replace the earlier manual installation: /etc units would shadow the packaged units.
-    # Stop with the old script still present so its getty-before-gadget ordering is retained.
-    if [ -f /etc/systemd/system/openxplay-usb-gadget.service ] &&
-        ! dpkg-query -S /etc/systemd/system/openxplay-usb-gadget.service >/dev/null 2>&1; then
-        if [ -d /run/systemd/system ]; then
-            deb-systemd-invoke stop openxplay-usb-gadget.service >/dev/null || :
-        fi
-    fi
-    for f in /usr/local/libexec/openxplay-usb-gadget \
-        /etc/systemd/system/openxplay-usb-gadget.service \
-        /etc/systemd/system/openxplay-usb-dhcp.service \
-        /etc/systemd/system/serial-getty@ttyGS0.service.d/openxplay-usb-gadget.conf; do
-        if { [ -e "$f" ] || [ -L "$f" ]; } && ! dpkg-query -S "$f" >/dev/null 2>&1; then
-            echo "openxplay-phicomm-n1: replacing hand-installed $f"
-            rm -f "$f"
-        fi
-    done
-    link=/etc/systemd/system/multi-user.target.wants/openxplay-usb-gadget.service
-    if [ -L "$link" ] && [ "$(readlink "$link")" = /etc/systemd/system/openxplay-usb-gadget.service ]; then
-        rm -f "$link"
-    fi
-    rmdir /etc/systemd/system/serial-getty@ttyGS0.service.d 2>/dev/null || :
     ;;
 esac
 exit 0

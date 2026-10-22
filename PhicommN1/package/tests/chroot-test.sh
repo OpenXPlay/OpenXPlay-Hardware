@@ -63,7 +63,7 @@ check 'package rejects wrong Debian version' grep -q 'requires Debian 13' /work/
 cp -f /etc/os-release "$fixture/etc/os-release"
 
 # A plain Debian image lacks the N1's runtime packages. Resolve only absent direct dependencies
-# with explicit fixtures, preserving real init-system-helpers for enable/disable/purge checks.
+# with explicit fixtures, preserving real init-system-helpers to detect service state changes.
 for pkg in bluez iw network-manager dnsmasq-base kmod; do
     if dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -qx 'install ok installed'; then continue; fi
     echo "Fixture dependency (no runtime payload): $pkg"
@@ -117,61 +117,51 @@ for mode in dry install; do
     check "$mode leaves dpkg audit clean" sh -c '[ -z "$(dpkg --audit)" ]'
 done
 
-# Recreate the manual installation documented in the N1 README.
-mkdir -p /usr/local/libexec /etc/systemd/system/serial-getty@ttyGS0.service.d \
-    /etc/systemd/system/multi-user.target.wants
-cp -f "$here/../../usb-gadget/usb-gadget.sh" /usr/local/libexec/openxplay-usb-gadget
-cp -f "$here/../../usb-gadget/"*.service /etc/systemd/system/
-cp -f "$here/../../usb-gadget/serial-getty-ttyGS0.conf" \
-    /etc/systemd/system/serial-getty@ttyGS0.service.d/openxplay-usb-gadget.conf
-ln -s /etc/systemd/system/openxplay-usb-gadget.service \
-    /etc/systemd/system/multi-user.target.wants/openxplay-usb-gadget.service
-printf '[Service]\nNice=1\n' > /etc/systemd/system/serial-getty@ttyGS0.service.d/owner.conf
+# The host profile package must leave all unit enablement links unchanged.
+mkdir -p /etc/systemd /run/systemd /var/lib/systemd
+unit_links() {
+    find /etc/systemd /run/systemd /var/lib/systemd -type l -printf '%p %l\n' | sort
+}
+unit_links > /work/units-before
 dpkg -i /work/debs/openxplay-phicomm-n1_*_all.deb >/work/install.log 2>&1 || { cat /work/install.log; exit 1; }
 check 'package installed' sh -c '[ "$(dpkg-query -W -f="\${Status} \${Version}" openxplay-phicomm-n1)" = "install ok installed 0.1.0" ]'
 check 'package files unmodified' sh -c '[ -z "$(dpkg -V openxplay-phicomm-n1)" ]'
 check 'dpkg audit clean' sh -c '[ -z "$(dpkg --audit)" ]'
 check 'host profile conffile' sh -c 'dpkg-query -W -f="\${Conffiles}" openxplay-phicomm-n1 | grep -q /etc/openxplay/host.json'
 check 'host profile bytes' cmp /etc/openxplay/host.json "$here/../../host.json"
-check 'gadget script bytes unchanged' cmp /usr/lib/openxplay-phicomm-n1/usb-gadget "$here/../../usb-gadget/usb-gadget.sh"
-check 'gadget executable' test -x /usr/lib/openxplay-phicomm-n1/usb-gadget
-check 'DHCP unit unchanged' cmp /usr/lib/systemd/system/openxplay-usb-dhcp.service "$here/../../usb-gadget/openxplay-usb-dhcp.service"
-check 'getty ordering unchanged' cmp /usr/lib/systemd/system/serial-getty@ttyGS0.service.d/openxplay-usb-gadget.conf "$here/../../usb-gadget/serial-getty-ttyGS0.conf"
-check 'packaged ExecStart' grep -qx 'ExecStart=/usr/lib/openxplay-phicomm-n1/usb-gadget start' /usr/lib/systemd/system/openxplay-usb-gadget.service
-check 'gadget enabled without a running systemd' test -L /etc/systemd/system/multi-user.target.wants/openxplay-usb-gadget.service
-check 'enable link points to vendor unit' sh -c '[ "$(readlink -f /etc/systemd/system/multi-user.target.wants/openxplay-usb-gadget.service)" = /usr/lib/systemd/system/openxplay-usb-gadget.service ]'
-check 'manual script removed' test ! -e /usr/local/libexec/openxplay-usb-gadget
-check 'manual shadow unit removed' test ! -e /etc/systemd/system/openxplay-usb-gadget.service
-check 'owner getty drop-in preserved' test -f /etc/systemd/system/serial-getty@ttyGS0.service.d/owner.conf
+check 'package ships no openxplay-usb-* units' sh -c '! dpkg-query -L openxplay-phicomm-n1 | grep -E "/openxplay-usb-[^/]+$"'
+check 'package ships no serial-getty@ttyGS0 drop-in' sh -c '! dpkg-query -L openxplay-phicomm-n1 | grep -F "/serial-getty@ttyGS0.service.d"'
+unit_links > /work/units-after
+check 'install enables no unit' cmp /work/units-before /work/units-after
 
-# A container may expose /run/systemd/system without any UDC. Simulate a failed start and ensure
-# postinst still configures successfully; no real systemctl or modprobe can run here.
+# Simulate a booted systemd and a failed Bluetooth start without running a real service command.
 mkdir -p /work/bin /run/systemd/system
-cat > /work/bin/systemctl <<'EOF'
+for cmd in systemctl deb-systemd-helper deb-systemd-invoke; do
+    cat > "/work/bin/$cmd" <<'EOF'
 #!/bin/sh
-echo "systemctl $*" >> /work/runtime.log
-exit 0
+echo "$(basename "$0") $*" >> /work/runtime.log
+exit "${TEST_SERVICE_EXIT:-0}"
 EOF
-cat > /work/bin/deb-systemd-invoke <<'EOF'
-#!/bin/sh
-echo "deb-systemd-invoke $*" >> /work/runtime.log
-[ "$1" != restart ]
-EOF
+done
 chmod 0755 /work/bin/*
-check 'postinst tolerates absent UDC with systemd running' env PATH="/work/bin:$PATH" DPKG_MAINTSCRIPT_PACKAGE=openxplay-phicomm-n1 sh "$here/../debian/postinst" configure 0.1.0
-check 'live postinst attempts gadget start' grep -qx 'deb-systemd-invoke restart openxplay-usb-gadget.service' /work/runtime.log
-check 'live postinst starts Bluetooth' grep -qx 'deb-systemd-invoke start bluetooth.service' /work/runtime.log
+printf 'deb-systemd-invoke start bluetooth.service\n' > /work/runtime-expected
+check 'postinst succeeds with systemd running' env PATH="/work/bin:$PATH" DPKG_MAINTSCRIPT_PACKAGE=openxplay-phicomm-n1 sh "$here/../debian/postinst" configure 0.1.0
+check 'live postinst only starts Bluetooth' cmp /work/runtime-expected /work/runtime.log
+: > /work/runtime.log
+check 'postinst tolerates Bluetooth start failure' env PATH="/work/bin:$PATH" TEST_SERVICE_EXIT=1 DPKG_MAINTSCRIPT_PACKAGE=openxplay-phicomm-n1 sh "$here/../debian/postinst" configure 0.1.0
+check 'failed start changes no other service' cmp /work/runtime-expected /work/runtime.log
 echo '# owner edit' >> /etc/openxplay/host.json
 PATH="/work/bin:$PATH" dpkg --force-confdef --force-confold -i /work/debs/openxplay-phicomm-n1_*_all.deb >/dev/null 2>&1
 check 'local conffile edit preserved' grep -qx '# owner edit' /etc/openxplay/host.json
+unit_links > /work/units-after
+check 'live configure and reinstall enable no unit' cmp /work/units-before /work/units-after
+: > /work/runtime.log
 PATH="/work/bin:$PATH" dpkg -r openxplay-phicomm-n1 >/dev/null 2>&1
-check 'prerm stops gadget' grep -qx 'deb-systemd-invoke stop openxplay-usb-gadget.service' /work/runtime.log
-check 'prerm disables gadget' test ! -L /etc/systemd/system/multi-user.target.wants/openxplay-usb-gadget.service
-check 'package payload removed' test ! -e /usr/lib/openxplay-phicomm-n1/usb-gadget
+check 'package license removed' test ! -e /usr/share/doc/openxplay-phicomm-n1/LICENSE
 check 'conffile kept on remove' test -f /etc/openxplay/host.json
 PATH="/work/bin:$PATH" dpkg --purge openxplay-phicomm-n1 >/dev/null 2>&1
 check 'conffile removed on purge' test ! -e /etc/openxplay/host.json
-check 'vendor getty drop-in removed on purge' test ! -e /usr/lib/systemd/system/serial-getty@ttyGS0.service.d/openxplay-usb-gadget.conf
-check 'owner getty drop-in survives purge' test -f /etc/systemd/system/serial-getty@ttyGS0.service.d/owner.conf
-check 'helper state removed on purge' sh -c '! find /var/lib/systemd -name "*openxplay-usb-gadget*" | grep .'
+check 'remove and purge run no service commands' test ! -s /work/runtime.log
+unit_links > /work/units-after
+check 'remove and purge preserve unit links' cmp /work/units-before /work/units-after
 echo "PASS $pass N1 trixie arm64 package lifecycle checks (offline dependency fixtures)"

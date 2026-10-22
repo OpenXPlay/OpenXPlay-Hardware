@@ -5,14 +5,7 @@
 set -eu
 case "$1" in
 configure|abort-upgrade|abort-deconfigure|abort-remove)
-    # Enabling links is safe in a chroot; runtime actions require a booted systemd.
-    deb-systemd-helper unmask openxplay-usb-gadget.service >/dev/null || :
-    deb-systemd-helper enable openxplay-usb-gadget.service >/dev/null || :
     if [ -d /run/systemd/system ]; then
-        systemctl --system daemon-reload >/dev/null || :
-        # No UDC in image builds/containers: leave the unit enabled for the next real boot.
-        deb-systemd-invoke restart openxplay-usb-gadget.service >/dev/null ||
-            echo 'openxplay-phicomm-n1: USB gadget unavailable; it will be retried at boot.' >&2
         deb-systemd-invoke start bluetooth.service >/dev/null || :
     fi
     ;;

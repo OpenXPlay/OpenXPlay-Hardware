@@ -51,16 +51,6 @@ root=$work/root
 umask 022
 put() { install -D -m "$1" "$2" "$root$3"; }
 put 0644 "$n1/host.json" /etc/openxplay/host.json
-put 0755 "$n1/usb-gadget/usb-gadget.sh" /usr/lib/openxplay-phicomm-n1/usb-gadget
-put 0644 "$n1/usb-gadget/openxplay-usb-dhcp.service" /usr/lib/systemd/system/openxplay-usb-dhcp.service
-put 0644 "$n1/usb-gadget/serial-getty-ttyGS0.conf" \
-    /usr/lib/systemd/system/serial-getty@ttyGS0.service.d/openxplay-usb-gadget.conf
-sed 's#/usr/local/libexec/openxplay-usb-gadget#/usr/lib/openxplay-phicomm-n1/usb-gadget#g' \
-    "$n1/usb-gadget/openxplay-usb-gadget.service" > "$root/usr/lib/systemd/system/openxplay-usb-gadget.service"
-grep -qx 'ExecStart=/usr/lib/openxplay-phicomm-n1/usb-gadget start' \
-    "$root/usr/lib/systemd/system/openxplay-usb-gadget.service" || fail 'Unexpected gadget ExecStart'
-grep -qx 'ExecStop=/usr/lib/openxplay-phicomm-n1/usb-gadget stop' \
-    "$root/usr/lib/systemd/system/openxplay-usb-gadget.service" || fail 'Unexpected gadget ExecStop'
 doc=$root/usr/share/doc/openxplay-phicomm-n1
 install -d "$doc" "$root/DEBIAN"
 install -m 0644 "$repo/LICENSE" "$doc/LICENSE"
@@ -75,7 +65,7 @@ License: LicenseRef-OpenXPlay-Hardware-1.0
  See LICENSE: no commercial use; distributors must publish the complete source.
 EOF
 ctl=$root/DEBIAN
-for s in preinst postinst prerm postrm; do install -m 0755 "$here/debian/$s" "$ctl/$s"; done
+for s in preinst postinst; do install -m 0755 "$here/debian/$s" "$ctl/$s"; done
 echo /etc/openxplay/host.json > "$ctl/conffiles"
 size=$(du -sk --exclude=DEBIAN "$root" | cut -f1)
 cat > "$ctl/control" <<EOF
@@ -89,8 +79,8 @@ Section: misc
 Priority: optional
 Homepage: https://openxplay.org
 Description: OpenXPlay device support for the Phicomm N1 TV box
- Host profile and USB management gadget (NCM Ethernet and ACM console)
- for ophub Armbian, Debian 13 arm64. No relay or accessory identity.
+ Phicomm N1 host profile and offline dependencies required by the relay
+ on ophub Armbian, Debian 13 arm64. No relay or accessory identity.
 EOF
 (cd "$root" && find . -type f ! -path './DEBIAN/*' | LC_ALL=C sort | sed 's#^\./##' |
     while IFS= read -r f; do md5sum "$f"; done) > "$ctl/md5sums"
