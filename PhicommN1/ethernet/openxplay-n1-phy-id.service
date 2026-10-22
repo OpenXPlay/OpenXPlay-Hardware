@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 OpenXPlay.org
+# SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
+# Created by riko chen on 2026-10-21
+[Unit]
+Description=Identify the Phicomm N1 Ethernet PHY in the boot device tree
+RequiresMountsFor=/boot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/openxplay-phicomm-n1/phy-id apply
+
+[Install]
+WantedBy=multi-user.target

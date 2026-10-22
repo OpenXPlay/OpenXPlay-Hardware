@@ -1,0 +1,13 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 OpenXPlay.org
+# SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
+# Created by riko chen on 2026-10-21
+set -eu
+fail() { echo "openxplay-phicomm-n1: $*" >&2; exit 1; }
+# Runtime actions only on a booted system, never in an image build or chroot.
+live() { [ -d /run/systemd/system ]; }
+if [ "$1" = remove ]; then
+    if live; then deb-systemd-invoke stop openxplay-n1-phy-id.path >/dev/null || :; fi
+    /usr/lib/openxplay-phicomm-n1/phy-id revert || fail 'cannot revert the Ethernet PHY fix'
+fi
+exit 0

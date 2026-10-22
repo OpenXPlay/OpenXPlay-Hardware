@@ -9,7 +9,7 @@ Created by riko chen on 2026-10-21
 
 斐讯 N1 电视盒子（晶晨 S905D）的支持文件，适用于从 eMMC 运行 ophub Armbian（Debian 13，内核 6.12）的设备。
 
-`package/` 构建设备包（主机配置）以及 OpenXPlay Flasher 通过网络 SSH 安装的离线设备整合包：
+`package/` 构建设备包，以及 OpenXPlay Flasher 通过网络 SSH 安装的离线设备整合包。设备包安装主机配置，并修复两个板级问题：把以太网 PHY 的 ID 写入启动设备树（内核更新后会重新写入），使每次开机都能识别 PHY；给 wlan0 换成由出厂以太网 MAC 推导的地址，取代所有 N1 共用的那个：
 
 ```sh
 sh package/build-deb.sh out

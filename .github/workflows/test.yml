@@ -38,6 +38,12 @@ jobs:
           python3 PhicommN1/package/tests/profile-test.py
       - name: Test Phicomm N1 bundle and installer (offline)
         run: python3 PhicommN1/package/tests/installer-test.py
+      - name: Install device tree tools for Phicomm N1 tests
+        run: sudo apt-get update && sudo apt-get install -y device-tree-compiler
+      - name: Test Phicomm N1 Wi-Fi MAC (offline)
+        run: sh PhicommN1/package/tests/wifi-mac-test.sh
+      - name: Test Phicomm N1 Ethernet PHY ID (offline)
+        run: sh PhicommN1/package/tests/phy-id-test.sh
       - name: Test Phicomm N1 package in trixie arm64 (offline, if cached)
         run: sh PhicommN1/package/tests/chroot-test.sh
       - name: Test

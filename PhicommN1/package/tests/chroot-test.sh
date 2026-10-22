@@ -6,6 +6,7 @@
 # Missing runtime dependencies use empty test packages; this tests packaging, not their behavior.
 set -eu
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+fail() { echo "FAIL N1 chroot: $*" >&2; exit 1; }
 if [ "${1:-}" != --inside ]; then
     [ "$#" -eq 0 ] || { echo "Usage: $0" >&2; exit 2; }
     if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
@@ -39,7 +40,7 @@ fi
 [ "$(id -u)" -eq 0 ] && [ "$(dpkg --print-architecture)" = arm64 ] || exit 2
 os=$( . /etc/os-release; printf '%s:%s' "$ID" "$VERSION_ID" )
 [ "$os" = debian:13 ] || { echo 'Needs Debian trixie arm64' >&2; exit 2; }
-export LC_ALL=C DEBIAN_FRONTEND=noninteractive
+export LC_ALL=C DEBIAN_FRONTEND=noninteractive DPKG_MAINTSCRIPT_PACKAGE=openxplay-phicomm-n1
 pass=0
 check() {
     title=$1; shift
@@ -64,7 +65,7 @@ cp -f /etc/os-release "$fixture/etc/os-release"
 
 # A plain Debian image lacks the N1's runtime packages. Resolve only absent direct dependencies
 # with explicit fixtures, preserving real init-system-helpers to detect service state changes.
-for pkg in bluez iw network-manager dnsmasq-base kmod; do
+for pkg in bluez iw network-manager dnsmasq-base kmod device-tree-compiler iproute2; do
     if dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -qx 'install ok installed'; then continue; fi
     echo "Fixture dependency (no runtime payload): $pkg"
     ctl=/work/dependency-$pkg/DEBIAN
@@ -117,11 +118,14 @@ for mode in dry install; do
     check "$mode leaves dpkg audit clean" sh -c '[ -z "$(dpkg --audit)" ]'
 done
 
-# The host profile package must leave all unit enablement links unchanged.
+# Only the two device units may change enablement links.
 mkdir -p /etc/systemd /run/systemd /var/lib/systemd
 unit_links() {
-    find /etc/systemd /run/systemd /var/lib/systemd -type l -printf '%p %l\n' | sort
+    find /etc/systemd /run/systemd /var/lib/systemd -type l ! -name 'openxplay-n1-phy-id.*' -printf '%p %l\n' | sort
 }
+helper_state() { find /var/lib/systemd -path '*deb-systemd-helper*' -name 'openxplay-n1-phy-id.*' -print; }
+units='openxplay-n1-phy-id.service openxplay-n1-phy-id.path'
+check 'container is not booted with systemd' test ! -d /run/systemd/system
 unit_links > /work/units-before
 dpkg -i /work/debs/openxplay-phicomm-n1_*_all.deb >/work/install.log 2>&1 || { cat /work/install.log; exit 1; }
 check 'package installed' sh -c '[ "$(dpkg-query -W -f="\${Status} \${Version}" openxplay-phicomm-n1)" = "install ok installed 0.1.0" ]'
@@ -131,37 +135,117 @@ check 'host profile conffile' sh -c 'dpkg-query -W -f="\${Conffiles}" openxplay-
 check 'host profile bytes' cmp /etc/openxplay/host.json "$here/../../host.json"
 check 'package ships no openxplay-usb-* units' sh -c '! dpkg-query -L openxplay-phicomm-n1 | grep -E "/openxplay-usb-[^/]+$"'
 check 'package ships no serial-getty@ttyGS0 drop-in' sh -c '! dpkg-query -L openxplay-phicomm-n1 | grep -F "/serial-getty@ttyGS0.service.d"'
+for program in phy-id wifi-mac; do
+    check "mode 0755: $program" test "$(stat -c %a "/usr/lib/openxplay-phicomm-n1/$program")" = 755
+done
+check 'PHY program bytes' cmp /usr/lib/openxplay-phicomm-n1/phy-id "$here/../../ethernet/phy-id.sh"
+check 'Wi-Fi program bytes' cmp /usr/lib/openxplay-phicomm-n1/wifi-mac "$here/../../wifi/wifi-mac.sh"
+for unit in $units; do
+    check "mode 0644: $unit" test "$(stat -c %a "/lib/systemd/system/$unit")" = 644
+    check "unit bytes: $unit" cmp "/lib/systemd/system/$unit" "$here/../../ethernet/$unit"
+    check "helper enables $unit" deb-systemd-helper --quiet is-enabled "$unit"
+    check "helper remembers $unit" deb-systemd-helper --quiet was-enabled "$unit"
+    check "unit enablement link: $unit" test \
+        "$(readlink -f "/etc/systemd/system/multi-user.target.wants/$unit")" = "$(readlink -f "/lib/systemd/system/$unit")"
+done
+rule=/lib/udev/rules.d/70-openxplay-n1-wifi-mac.rules
+check 'mode 0644: Wi-Fi udev rule' test "$(stat -c %a "$rule")" = 644
+check 'Wi-Fi udev rule bytes' cmp "$rule" "$here/../../wifi/70-openxplay-n1-wifi-mac.rules"
+check 'image install does not run PHY apply' test ! -e "$fixture/run/lock/openxplay-n1-phy-id.lock"
+check 'configure message printed once' test "$(grep -cFx \
+    'openxplay-phicomm-n1: the Ethernet PHY fix and the per-device Wi-Fi address take effect at the next boot.' /work/install.log)" -eq 1
+/usr/lib/openxplay-phicomm-n1/phy-id status > /work/phy-status || fail 'PHY status failed in container'
+check 'container PHY status is unsupported' grep -qx 'unsupported .*' /work/phy-status
+helper_state > /work/helper-state
+check 'helper state recorded' test -s /work/helper-state
 unit_links > /work/units-after
-check 'install enables no unit' cmp /work/units-before /work/units-after
+check 'install preserves unrelated unit links' cmp /work/units-before /work/units-after
 
-# Simulate a booted systemd and a failed Bluetooth start without running a real service command.
-mkdir -p /work/bin /run/systemd/system
-for cmd in systemctl deb-systemd-helper deb-systemd-invoke; do
+# Runtime commands are shims; deb-systemd-helper remains real for the whole lifecycle.
+mkdir -p /work/bin
+for cmd in systemctl deb-systemd-invoke udevadm ip; do
     cat > "/work/bin/$cmd" <<'EOF'
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 OpenXPlay.org
+# SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
+# Created by riko chen on 2026-10-21
+set -eu
 echo "$(basename "$0") $*" >> /work/runtime.log
 exit "${TEST_SERVICE_EXIT:-0}"
 EOF
 done
+cat > /work/bin/flock <<'EOF'
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 OpenXPlay.org
+# SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
+# Created by riko chen on 2026-10-21
+set -eu
+exit "${TEST_PHY_LOCK_EXIT:-0}"
+EOF
 chmod 0755 /work/bin/*
-printf 'deb-systemd-invoke start bluetooth.service\n' > /work/runtime-expected
-check 'postinst succeeds with systemd running' env PATH="/work/bin:$PATH" DPKG_MAINTSCRIPT_PACKAGE=openxplay-phicomm-n1 sh "$here/../debian/postinst" configure 0.1.0
-check 'live postinst only starts Bluetooth' cmp /work/runtime-expected /work/runtime.log
 : > /work/runtime.log
-check 'postinst tolerates Bluetooth start failure' env PATH="/work/bin:$PATH" TEST_SERVICE_EXIT=1 DPKG_MAINTSCRIPT_PACKAGE=openxplay-phicomm-n1 sh "$here/../debian/postinst" configure 0.1.0
-check 'failed start changes no other service' cmp /work/runtime-expected /work/runtime.log
+postinst() {
+    env PATH="/work/bin:$PATH" "$@" sh "$here/../debian/postinst" configure 0.1.0 > /work/postinst.log 2>&1
+}
+check 'image postinst succeeds' postinst
+check 'image postinst runs no runtime commands' test ! -s /work/runtime.log
+mkdir -p /run/systemd/system
+cat > /work/runtime-expected <<'EOF'
+systemctl --system daemon-reload
+deb-systemd-invoke start openxplay-n1-phy-id.path
+udevadm control --reload
+deb-systemd-invoke start bluetooth.service
+EOF
+check 'live postinst succeeds' postinst
+check 'live postinst starts the watcher and Bluetooth and reloads udev' cmp /work/runtime-expected /work/runtime.log
+check 'live postinst applies PHY fix once' test "$(grep -c 'openxplay-n1-phy-id: unsupported' /work/postinst.log)" -eq 1
+: > /work/runtime.log
+check 'postinst tolerates runtime and PHY failures' postinst TEST_SERVICE_EXIT=1 TEST_PHY_LOCK_EXIT=1
+check 'failed commands do not skip later runtime actions' cmp /work/runtime-expected /work/runtime.log
+check 'PHY failure warning printed' grep -q 'warning: Ethernet PHY fix failed' /work/postinst.log
+for action in abort-upgrade abort-deconfigure abort-remove; do
+    : > /work/runtime.log
+    check "$action succeeds" env PATH="/work/bin:$PATH" sh "$here/../debian/postinst" "$action" 0.1.0
+    check "$action runs the guarded runtime actions" cmp /work/runtime-expected /work/runtime.log
+done
 echo '# owner edit' >> /etc/openxplay/host.json
 PATH="/work/bin:$PATH" dpkg --force-confdef --force-confold -i /work/debs/openxplay-phicomm-n1_*_all.deb >/dev/null 2>&1
 check 'local conffile edit preserved' grep -qx '# owner edit' /etc/openxplay/host.json
+for unit in $units; do check "reinstall retains helper state: $unit" deb-systemd-helper --quiet is-enabled "$unit"; done
 unit_links > /work/units-after
-check 'live configure and reinstall enable no unit' cmp /work/units-before /work/units-after
+check 'live configure and reinstall preserve unrelated links' cmp /work/units-before /work/units-after
+mkdir -p /var/lib/openxplay-phicomm-n1
+printf 'purge me\n' > /var/lib/openxplay-phicomm-n1/purge-marker
 : > /work/runtime.log
-PATH="/work/bin:$PATH" dpkg -r openxplay-phicomm-n1 >/dev/null 2>&1
+PATH="/work/bin:$PATH" dpkg -r openxplay-phicomm-n1 > /work/remove.log 2>&1 || { cat /work/remove.log; fail 'remove failed'; }
+printf 'deb-systemd-invoke stop openxplay-n1-phy-id.path\nsystemctl --system daemon-reload\n' > /work/remove-expected
+# The real deb-systemd-helper reloads systemd itself on a live system after mask, purge and
+# unmask; only those reloads may follow the package's own commands.
+runtime_is() {
+    lines=$(wc -l < "$1")
+    head -n "$lines" /work/runtime.log | cmp "$1" - &&
+        ! tail -n +"$((lines + 1))" /work/runtime.log | grep -vqx 'systemctl daemon-reload'
+}
+check 'remove stops watcher and reloads systemd' runtime_is /work/remove-expected
 check 'package license removed' test ! -e /usr/share/doc/openxplay-phicomm-n1/LICENSE
 check 'conffile kept on remove' test -f /etc/openxplay/host.json
-PATH="/work/bin:$PATH" dpkg --purge openxplay-phicomm-n1 >/dev/null 2>&1
+check 'state kept until purge' test -f /var/lib/openxplay-phicomm-n1/purge-marker
+for unit in $units; do check "helper masks removed unit: $unit" test "$(readlink "/etc/systemd/system/$unit")" = /dev/null; done
+check 'PHY program removed' test ! -e /usr/lib/openxplay-phicomm-n1/phy-id
+check 'Wi-Fi program removed' test ! -e /usr/lib/openxplay-phicomm-n1/wifi-mac
+check 'Wi-Fi rule removed' test ! -e "$rule"
+: > /work/runtime.log
+PATH="/work/bin:$PATH" dpkg --purge openxplay-phicomm-n1 > /work/purge.log 2>&1 || { cat /work/purge.log; fail 'purge failed'; }
+printf 'systemctl --system daemon-reload\n' > /work/purge-expected
+check 'purge reloads systemd' runtime_is /work/purge-expected
 check 'conffile removed on purge' test ! -e /etc/openxplay/host.json
-check 'remove and purge run no service commands' test ! -s /work/runtime.log
+check 'package state removed on purge' test ! -e /var/lib/openxplay-phicomm-n1
+helper_state > /work/helper-state
+check 'helper state removed on purge' test ! -s /work/helper-state
+for unit in $units; do
+    check "purge removes enablement link: $unit" test ! -L "/etc/systemd/system/multi-user.target.wants/$unit"
+    check "purge unmasks unit: $unit" test ! -L "/etc/systemd/system/$unit"
+done
 unit_links > /work/units-after
-check 'remove and purge preserve unit links' cmp /work/units-before /work/units-after
+check 'remove and purge preserve unrelated unit links' cmp /work/units-before /work/units-after
 echo "PASS $pass N1 trixie arm64 package lifecycle checks (offline dependency fixtures)"

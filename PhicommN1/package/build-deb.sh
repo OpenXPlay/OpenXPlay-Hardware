@@ -51,6 +51,12 @@ root=$work/root
 umask 022
 put() { install -D -m "$1" "$2" "$root$3"; }
 put 0644 "$n1/host.json" /etc/openxplay/host.json
+put 0755 "$n1/ethernet/phy-id.sh" /usr/lib/openxplay-phicomm-n1/phy-id
+put 0755 "$n1/wifi/wifi-mac.sh" /usr/lib/openxplay-phicomm-n1/wifi-mac
+for unit in openxplay-n1-phy-id.service openxplay-n1-phy-id.path; do
+    put 0644 "$n1/ethernet/$unit" "/lib/systemd/system/$unit"
+done
+put 0644 "$n1/wifi/70-openxplay-n1-wifi-mac.rules" /lib/udev/rules.d/70-openxplay-n1-wifi-mac.rules
 doc=$root/usr/share/doc/openxplay-phicomm-n1
 install -d "$doc" "$root/DEBIAN"
 install -m 0644 "$repo/LICENSE" "$doc/LICENSE"
@@ -65,7 +71,7 @@ License: LicenseRef-OpenXPlay-Hardware-1.0
  See LICENSE: no commercial use; distributors must publish the complete source.
 EOF
 ctl=$root/DEBIAN
-for s in preinst postinst; do install -m 0755 "$here/debian/$s" "$ctl/$s"; done
+for s in preinst postinst prerm postrm; do install -m 0755 "$here/debian/$s" "$ctl/$s"; done
 echo /etc/openxplay/host.json > "$ctl/conffiles"
 size=$(du -sk --exclude=DEBIAN "$root" | cut -f1)
 cat > "$ctl/control" <<EOF
@@ -74,13 +80,13 @@ Version: $version
 Architecture: all
 Maintainer: OpenXPlay.org <support@openxplay.org>
 Installed-Size: $size
-Depends: bluez, iw, network-manager, dnsmasq-base, kmod, init-system-helpers (>= 1.54)
+Depends: bluez, iw, network-manager, dnsmasq-base, kmod, init-system-helpers (>= 1.54), device-tree-compiler, iproute2
 Section: misc
 Priority: optional
 Homepage: https://openxplay.org
 Description: OpenXPlay device support for the Phicomm N1 TV box
- Phicomm N1 host profile and offline dependencies required by the relay
- on ophub Armbian, Debian 13 arm64. No relay or accessory identity.
+ Phicomm N1 host profile, Ethernet PHY and Wi-Fi address fixes, and offline
+ dependencies for ophub Armbian, Debian 13 arm64. No relay or accessory identity.
 EOF
 (cd "$root" && find . -type f ! -path './DEBIAN/*' | LC_ALL=C sort | sed 's#^\./##' |
     while IFS= read -r f; do md5sum "$f"; done) > "$ctl/md5sums"
