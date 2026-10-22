@@ -11,7 +11,7 @@ remove|purge)
     if live; then systemctl --system daemon-reload >/dev/null || :; fi
     ;;
 esac
-for unit in openxplay-n1-phy-id.service openxplay-n1-phy-id.path; do
+for unit in openxplay-n1-phy-id.service openxplay-n1-phy-id.path openxplay-n1-bt-addr.service; do
     if [ "$1" = remove ] && [ -x /usr/bin/deb-systemd-helper ]; then
         deb-systemd-helper mask "$unit" >/dev/null || :
     fi

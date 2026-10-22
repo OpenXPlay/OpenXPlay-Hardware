@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 OpenXPlay.org
+# SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
+# Created by riko chen on 2026-10-21
+[Unit]
+Description=Give the Phicomm N1 Bluetooth controller a per-device address
+Before=bluetooth.service
+Before=openxplay-relay.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/openxplay-phicomm-n1/bt-addr
+TimeoutStartSec=90
+
+[Install]
+WantedBy=bluetooth.target

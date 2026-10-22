@@ -53,6 +53,8 @@ put() { install -D -m "$1" "$2" "$root$3"; }
 put 0644 "$n1/host.json" /etc/openxplay/host.json
 put 0755 "$n1/ethernet/phy-id.sh" /usr/lib/openxplay-phicomm-n1/phy-id
 put 0755 "$n1/wifi/wifi-mac.sh" /usr/lib/openxplay-phicomm-n1/wifi-mac
+put 0755 "$n1/bluetooth/bt-addr.sh" /usr/lib/openxplay-phicomm-n1/bt-addr
+put 0644 "$n1/bluetooth/openxplay-n1-bt-addr.service" /lib/systemd/system/openxplay-n1-bt-addr.service
 for unit in openxplay-n1-phy-id.service openxplay-n1-phy-id.path; do
     put 0644 "$n1/ethernet/$unit" "/lib/systemd/system/$unit"
 done

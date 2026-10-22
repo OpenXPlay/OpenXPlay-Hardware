@@ -118,13 +118,13 @@ for mode in dry install; do
     check "$mode leaves dpkg audit clean" sh -c '[ -z "$(dpkg --audit)" ]'
 done
 
-# Only the two device units may change enablement links.
+# Only the device units may change enablement links.
 mkdir -p /etc/systemd /run/systemd /var/lib/systemd
 unit_links() {
-    find /etc/systemd /run/systemd /var/lib/systemd -type l ! -name 'openxplay-n1-phy-id.*' -printf '%p %l\n' | sort
+    find /etc/systemd /run/systemd /var/lib/systemd -type l ! -name 'openxplay-n1-phy-id.*' ! -name 'openxplay-n1-bt-addr.service' -printf '%p %l\n' | sort
 }
-helper_state() { find /var/lib/systemd -path '*deb-systemd-helper*' -name 'openxplay-n1-phy-id.*' -print; }
-units='openxplay-n1-phy-id.service openxplay-n1-phy-id.path'
+helper_state() { find /var/lib/systemd -path '*deb-systemd-helper*' \( -name 'openxplay-n1-phy-id.*' -o -name 'openxplay-n1-bt-addr.service*' \) -print; }
+units='openxplay-n1-phy-id.service openxplay-n1-phy-id.path openxplay-n1-bt-addr.service'
 check 'container is not booted with systemd' test ! -d /run/systemd/system
 unit_links > /work/units-before
 dpkg -i /work/debs/openxplay-phicomm-n1_*_all.deb >/work/install.log 2>&1 || { cat /work/install.log; exit 1; }
@@ -135,25 +135,29 @@ check 'host profile conffile' sh -c 'dpkg-query -W -f="\${Conffiles}" openxplay-
 check 'host profile bytes' cmp /etc/openxplay/host.json "$here/../../host.json"
 check 'package ships no openxplay-usb-* units' sh -c '! dpkg-query -L openxplay-phicomm-n1 | grep -E "/openxplay-usb-[^/]+$"'
 check 'package ships no serial-getty@ttyGS0 drop-in' sh -c '! dpkg-query -L openxplay-phicomm-n1 | grep -F "/serial-getty@ttyGS0.service.d"'
-for program in phy-id wifi-mac; do
+for program in phy-id wifi-mac bt-addr; do
     check "mode 0755: $program" test "$(stat -c %a "/usr/lib/openxplay-phicomm-n1/$program")" = 755
 done
 check 'PHY program bytes' cmp /usr/lib/openxplay-phicomm-n1/phy-id "$here/../../ethernet/phy-id.sh"
+check 'Bluetooth program bytes' cmp /usr/lib/openxplay-phicomm-n1/bt-addr "$here/../../bluetooth/bt-addr.sh"
 check 'Wi-Fi program bytes' cmp /usr/lib/openxplay-phicomm-n1/wifi-mac "$here/../../wifi/wifi-mac.sh"
 for unit in $units; do
+    source=ethernet
+    target=multi-user.target
+    if [ "$unit" = openxplay-n1-bt-addr.service ]; then source=bluetooth; target=bluetooth.target; fi
     check "mode 0644: $unit" test "$(stat -c %a "/lib/systemd/system/$unit")" = 644
-    check "unit bytes: $unit" cmp "/lib/systemd/system/$unit" "$here/../../ethernet/$unit"
+    check "unit bytes: $unit" cmp "/lib/systemd/system/$unit" "$here/../../$source/$unit"
     check "helper enables $unit" deb-systemd-helper --quiet is-enabled "$unit"
     check "helper remembers $unit" deb-systemd-helper --quiet was-enabled "$unit"
     check "unit enablement link: $unit" test \
-        "$(readlink -f "/etc/systemd/system/multi-user.target.wants/$unit")" = "$(readlink -f "/lib/systemd/system/$unit")"
+        "$(readlink -f "/etc/systemd/system/$target.wants/$unit")" = "$(readlink -f "/lib/systemd/system/$unit")"
 done
 rule=/lib/udev/rules.d/70-openxplay-n1-wifi-mac.rules
 check 'mode 0644: Wi-Fi udev rule' test "$(stat -c %a "$rule")" = 644
 check 'Wi-Fi udev rule bytes' cmp "$rule" "$here/../../wifi/70-openxplay-n1-wifi-mac.rules"
 check 'image install does not run PHY apply' test ! -e "$fixture/run/lock/openxplay-n1-phy-id.lock"
 check 'configure message printed once' test "$(grep -cFx \
-    'openxplay-phicomm-n1: the Ethernet PHY fix and the per-device Wi-Fi address take effect at the next boot.' /work/install.log)" -eq 1
+    'openxplay-phicomm-n1: the Ethernet PHY fix and the per-device Wi-Fi and Bluetooth addresses take effect at the next boot.' /work/install.log)" -eq 1
 /usr/lib/openxplay-phicomm-n1/phy-id status > /work/phy-status || fail 'PHY status failed in container'
 check 'container PHY status is unsupported' grep -qx 'unsupported .*' /work/phy-status
 helper_state > /work/helper-state
@@ -232,6 +236,7 @@ check 'conffile kept on remove' test -f /etc/openxplay/host.json
 check 'state kept until purge' test -f /var/lib/openxplay-phicomm-n1/purge-marker
 for unit in $units; do check "helper masks removed unit: $unit" test "$(readlink "/etc/systemd/system/$unit")" = /dev/null; done
 check 'PHY program removed' test ! -e /usr/lib/openxplay-phicomm-n1/phy-id
+check 'Bluetooth program removed' test ! -e /usr/lib/openxplay-phicomm-n1/bt-addr
 check 'Wi-Fi program removed' test ! -e /usr/lib/openxplay-phicomm-n1/wifi-mac
 check 'Wi-Fi rule removed' test ! -e "$rule"
 : > /work/runtime.log
@@ -243,7 +248,9 @@ check 'package state removed on purge' test ! -e /var/lib/openxplay-phicomm-n1
 helper_state > /work/helper-state
 check 'helper state removed on purge' test ! -s /work/helper-state
 for unit in $units; do
-    check "purge removes enablement link: $unit" test ! -L "/etc/systemd/system/multi-user.target.wants/$unit"
+    target=multi-user.target
+    if [ "$unit" = openxplay-n1-bt-addr.service ]; then target=bluetooth.target; fi
+    check "purge removes enablement link: $unit" test ! -L "/etc/systemd/system/$target.wants/$unit"
     check "purge unmasks unit: $unit" test ! -L "/etc/systemd/system/$unit"
 done
 unit_links > /work/units-after

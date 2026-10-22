@@ -8,7 +8,7 @@ live() { [ -d /run/systemd/system ]; }
 case "$1" in
 configure|abort-upgrade|abort-deconfigure|abort-remove)
     # Keep the admin's enablement choice on upgrades, as dh_installsystemd does.
-    for unit in openxplay-n1-phy-id.service openxplay-n1-phy-id.path; do
+    for unit in openxplay-n1-phy-id.service openxplay-n1-phy-id.path openxplay-n1-bt-addr.service; do
         deb-systemd-helper unmask "$unit" >/dev/null || :
         if deb-systemd-helper --quiet was-enabled "$unit"; then
             deb-systemd-helper enable "$unit" >/dev/null || :
@@ -26,7 +26,7 @@ configure|abort-upgrade|abort-deconfigure|abort-remove)
         deb-systemd-invoke start bluetooth.service >/dev/null || :
     fi
     if [ "$1" = configure ]; then
-        echo 'openxplay-phicomm-n1: the Ethernet PHY fix and the per-device Wi-Fi address take effect at the next boot.'
+        echo 'openxplay-phicomm-n1: the Ethernet PHY fix and the per-device Wi-Fi and Bluetooth addresses take effect at the next boot.'
     fi
     ;;
 esac

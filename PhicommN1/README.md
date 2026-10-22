@@ -9,7 +9,7 @@ Created by riko chen on 2026-10-21
 
 Support files for the Phicomm N1 TV box (Amlogic S905D) running ophub Armbian (Debian 13, kernel 6.12) from eMMC.
 
-`package/` builds the device package and the offline device bundle that the OpenXPlay Flasher installs over SSH on the network. The package installs the host profile and fixes two board problems: it writes the Ethernet PHY's ID into the boot device tree (again after kernel updates), so the PHY is found on every boot, and it gives wlan0 an address derived from the factory Ethernet MAC instead of the one every N1 shares:
+`package/` builds the device package and the offline device bundle that the OpenXPlay Flasher installs over SSH on the network. The package installs the host profile and fixes two board problems: it writes the Ethernet PHY's ID into the boot device tree (again after kernel updates), so the PHY is found on every boot, and it gives wlan0 and the Bluetooth controller addresses derived from the factory Ethernet MAC instead of the ones every N1 shares:
 
 ```sh
 sh package/build-deb.sh out
