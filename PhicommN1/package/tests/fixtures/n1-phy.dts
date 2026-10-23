@@ -1,0 +1,62 @@
+// SPDX-FileCopyrightText: 2026 OpenXPlay.org
+// SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
+// Created by riko chen on 2026-10-21
+/dts-v1/;
+
+/ {
+    #address-cells = <1>;
+    #size-cells = <1>;
+
+    gpio: gpio-controller {
+        gpio-controller;
+        #gpio-cells = <2>;
+        phandle = <0x10>;
+    };
+
+    intc: interrupt-controller {
+        interrupt-controller;
+        #interrupt-cells = <3>;
+        #address-cells = <0>;
+        phandle = <0x11>;
+    };
+
+    soc {
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        bus@c8834000 {
+            reg = <0xc8834000 0x1000>;
+            #address-cells = <1>;
+            #size-cells = <1>;
+            ranges;
+
+            mdio@558 {
+                reg = <0x558 0x10>;
+                #address-cells = <1>;
+                #size-cells = <0>;
+
+                mdio@0 {
+                    reg = <0>;
+                    #address-cells = <1>;
+                    #size-cells = <0>;
+
+                    ethernet-phy@0 {
+                        reg = <0>;
+                        max-speed = <1000>;
+                        reset-assert-us = <10000>;
+                        reset-deassert-us = <30000>;
+                        reset-gpios = <&gpio 8 0>;
+                        interrupt-parent = <&intc>;
+                        interrupts = <0 14 4>;
+                        eee-broken-1000t;
+                        phandle = <0x20>;
+                    };
+                };
+            };
+        };
+    };
+
+    unrelated {
+        test-value = "stock";
+    };
+};

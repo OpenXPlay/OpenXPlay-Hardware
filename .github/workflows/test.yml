@@ -32,5 +32,21 @@ jobs:
         run: find . -name '*.sh' -not -path './.git/*' -print0 | xargs -0 -n 1 sh -n
       - name: Test device release logic (offline)
         run: python3 UFI003/package/tests/release-test.py
+      - name: Test device profiles
+        run: |
+          python3 UFI003/package/tests/profile-test.py
+          python3 PhicommN1/package/tests/profile-test.py
+      - name: Test Phicomm N1 bundle and installer (offline)
+        run: python3 PhicommN1/package/tests/installer-test.py
+      - name: Install device tree tools for Phicomm N1 tests
+        run: sudo apt-get update && sudo apt-get install -y device-tree-compiler
+      - name: Test Phicomm N1 Wi-Fi MAC (offline)
+        run: sh PhicommN1/package/tests/wifi-mac-test.sh
+      - name: Test Phicomm N1 Bluetooth address (offline)
+        run: sh PhicommN1/package/tests/bt-addr-test.sh
+      - name: Test Phicomm N1 Ethernet PHY ID (offline)
+        run: sh PhicommN1/package/tests/phy-id-test.sh
+      - name: Test Phicomm N1 package in trixie arm64 (offline, if cached)
+        run: sh PhicommN1/package/tests/chroot-test.sh
       - name: Test
         run: sh UFI003/install/tests/run.sh

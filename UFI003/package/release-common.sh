@@ -7,7 +7,10 @@
 ufi003_release_fail() { printf '::error::%s\n' "$*" >&2; exit 1; }
 
 # Sets RELEASE_VERSION (display), DEBVERSION (payload/filename) and PRERELEASE.
-ufi003_release_version() {
+device_release_version() {
+    device=$1
+    shift
+    case "$device" in ufi003|phicomm-n1) ;; *) ufi003_release_fail "Unsupported device: $device" ;; esac
     PRERELEASE=false
     case "$1" in
         workflow_dispatch)
@@ -19,24 +22,26 @@ ufi003_release_version() {
             ;;
         push)
             case "$2" in
-                refs/tags/ufi003-device-v*) RELEASE_VERSION=${2#refs/tags/ufi003-device-v} ;;
-                *) ufi003_release_fail "Not a UFI003 device tag: $2" ;;
+                refs/tags/"$device"-device-v*) RELEASE_VERSION=${2#refs/tags/"$device"-device-v} ;;
+                *) ufi003_release_fail "Not a $device device tag: $2" ;;
             esac
             # SemVer core and prerelease identifiers; build metadata is not a release tag.
             case "$RELEASE_VERSION" in
-                ''|*[!0-9A-Za-z.-]*) ufi003_release_fail "Invalid UFI003 device version: $RELEASE_VERSION" ;;
+                ''|*[!0-9A-Za-z.-]*) ufi003_release_fail "Invalid $device device version: $RELEASE_VERSION" ;;
             esac
             ufi003_number='(0|[1-9][0-9]*)'
             ufi003_identifier="($ufi003_number|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
             printf '%s\n' "$RELEASE_VERSION" | LC_ALL=C grep -Eq \
                 "^$ufi003_number\\.$ufi003_number\\.$ufi003_number(-$ufi003_identifier(\\.$ufi003_identifier)*)?$" ||
-                ufi003_release_fail "Invalid UFI003 device version: $RELEASE_VERSION"
+                ufi003_release_fail "Invalid $device device version: $RELEASE_VERSION"
             case "$RELEASE_VERSION" in *-*) PRERELEASE=true ;; esac
             DEBVERSION=$(printf '%s' "$RELEASE_VERSION" | sed 's/-/~/')
             ;;
         *) ufi003_release_fail "Unsupported release event: $1" ;;
     esac
 }
+
+ufi003_release_version() { device_release_version ufi003 "$@"; }
 
 ufi003_release_curl() {
     curl --fail --location --silent --show-error --retry 3 \
@@ -106,10 +111,13 @@ ufi003_fetch_debs() (
 )
 
 # Checks a copy in a disposable directory; never extracts beside the release files.
-ufi003_check_bundle() (
+device_check_bundle() (
     set -eu
+    device=$1
+    shift
+    case "$device" in ufi003|phicomm-n1) ;; *) ufi003_release_fail "Unsupported device: $device" ;; esac
     version=$1
-    name=openxplay-ufi003-device-$version
+    name=openxplay-$device-device-$version
     bundle=$2/$name.tar.gz
     [ -f "$bundle" ] || ufi003_release_fail "Missing expected bundle: $bundle"
     work=$(mktemp -d)
@@ -128,11 +136,60 @@ ufi003_check_bundle() (
     tar -xzf "$bundle" -C "$work/unpacked" || ufi003_release_fail 'Cannot unpack bundle'
     root=$work/unpacked/$name
     [ -d "$root" ] || ufi003_release_fail 'Bundle top entry is not a directory'
-    jq -e -s --arg version "$version" '
+    jq -e -s --arg version "$version" --arg device "$device" '
         length == 1 and (.[0] |
             .schema == "org.openxplay.flash-stage/1" and
-            .stage == "device" and .device == "ufi003" and .version == $version)
+            .stage == "device" and .device == $device and .version == $version and
+            (if $device == "phicomm-n1" then
+                .transport == "ssh" and .requires.debianVersion == "13" and
+                .requires.deviceTreeModel == "Phicomm N1" and .requires.dpkgArchitecture == "arm64" and
+                (.requires | has("kernelRelease") | not)
+             else true end))
         ' "$root/manifest.json" >/dev/null || ufi003_release_fail 'Invalid bundle manifest or version'
     (cd "$root" && sha256sum -c SHA256SUMS) || ufi003_release_fail 'Bundle SHA256SUMS check failed'
     printf 'PASS %s\n' "$name.tar.gz"
+)
+
+ufi003_check_bundle() { device_check_bundle ufi003 "$@"; }
+
+# The N1 list is measured on the box and can contain any Debian binary package, arm64 or all.
+# Snapshot supplies the source-independent binary lookup; trust only the committed SHA-256 and
+# verified control fields. No package-name-to-source or architecture table is needed.
+phicomm_n1_fetch_debs() (
+    set -eu
+    pins=$1
+    debs=$2
+    mkdir -p "$debs"
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' 0
+    trap 'exit 1' HUP INT TERM
+    seen=' '
+    while read -r pkg version digest extra || [ -n "$pkg" ]; do
+        case "$pkg" in ''|'#'*) continue ;; esac
+        [ -z "$extra" ] && printf '%s\n' "$pkg" | grep -Eq '^[a-z0-9][a-z0-9+.-]+$' &&
+            printf '%s\n' "$digest" | grep -Eq '^[0-9a-f]{64}$' ||
+            ufi003_release_fail "Invalid debs.txt row: $pkg"
+        printf '%s\n' "$version" | grep -Eq '^[0-9][0-9A-Za-z.+:~-]*$' ||
+            ufi003_release_fail "Invalid pinned version: $pkg $version"
+        case "$seen" in *" $pkg "*) ufi003_release_fail "Duplicate pinned package: $pkg" ;; esac
+        seen="$seen$pkg "
+        encoded_version=$(jq -nr --arg version "$version" '$version | @uri')
+        ufi003_release_curl --output "$work/binaries.json" \
+            "https://snapshot.debian.org/mr/binary/$pkg/$encoded_version/binfiles" ||
+            ufi003_release_fail "Cannot locate $pkg $version on snapshot.debian.org"
+        hash=$(jq -er '
+            [.result[] | select(.architecture == "arm64" or .architecture == "all") | .hash] | unique |
+            if length == 1 then .[0] else error("Expected one arm64/all binary") end
+            ' "$work/binaries.json") || ufi003_release_fail "Ambiguous snapshot binary: $pkg $version"
+        printf '%s\n' "$hash" | grep -Eq '^[0-9a-f]{40}$' || ufi003_release_fail "Invalid snapshot file hash: $pkg"
+        part=$work/package.deb
+        ufi003_release_curl --output "$part" "https://snapshot.debian.org/file/$hash" ||
+            ufi003_release_fail "Cannot download $pkg $version"
+        printf '%s  %s\n' "$digest" "$part" | sha256sum -c - || ufi003_release_fail "SHA-256 mismatch: $pkg"
+        arch=$(dpkg-deb -f "$part" Architecture)
+        case "$arch" in arm64|all) ;; *) ufi003_release_fail "Unsupported architecture: $pkg $arch" ;; esac
+        [ "$(dpkg-deb -f "$part" Package)" = "$pkg" ] && [ "$(dpkg-deb -f "$part" Version)" = "$version" ] ||
+            ufi003_release_fail "Control metadata does not match pin: $pkg $version"
+        mv -f "$part" "$debs/${pkg}_${version#*:}_${arch}.deb"
+    done < "$pins"
 )

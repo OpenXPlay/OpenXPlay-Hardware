@@ -1,0 +1,33 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 OpenXPlay.org
+# SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
+# Created by riko chen on 2026-10-21
+set -eu
+# Runtime actions only on a booted system, never in an image build or chroot.
+live() { [ -d /run/systemd/system ]; }
+case "$1" in
+configure|abort-upgrade|abort-deconfigure|abort-remove)
+    # Keep the admin's enablement choice on upgrades, as dh_installsystemd does.
+    for unit in openxplay-n1-phy-id.service openxplay-n1-phy-id.path openxplay-n1-bt-addr.service; do
+        deb-systemd-helper unmask "$unit" >/dev/null || :
+        if deb-systemd-helper --quiet was-enabled "$unit"; then
+            deb-systemd-helper enable "$unit" >/dev/null || :
+        else
+            deb-systemd-helper update-state "$unit" >/dev/null || :
+        fi
+    done
+    if live; then
+        systemctl --system daemon-reload >/dev/null || :
+        deb-systemd-invoke start openxplay-n1-phy-id.path >/dev/null || :
+        if ! /usr/lib/openxplay-phicomm-n1/phy-id apply; then
+            echo 'openxplay-phicomm-n1: warning: Ethernet PHY fix failed; will retry at the next boot.' >&2
+        fi
+        udevadm control --reload >/dev/null 2>&1 || :
+        deb-systemd-invoke start bluetooth.service >/dev/null || :
+    fi
+    if [ "$1" = configure ]; then
+        echo 'openxplay-phicomm-n1: the Ethernet PHY fix and the per-device Wi-Fi and Bluetooth addresses take effect at the next boot.'
+    fi
+    ;;
+esac
+exit 0

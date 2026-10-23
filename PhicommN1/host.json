@@ -1,0 +1,6 @@
+{
+  "model": "Phicomm N1",
+  "wifiInterface": "wlan0",
+  "bluetoothAdapter": "hci0",
+  "secureConnections": "pairing-off"
+}

@@ -1,0 +1,19 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 OpenXPlay.org
+# SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
+# Created by riko chen on 2026-10-21
+set -eu
+fail() { echo "openxplay-phicomm-n1: $*" >&2; exit 1; }
+case "$1" in
+install|upgrade)
+    # The override supplies a fixture filesystem in offline tests; it never skips a check.
+    root=${OPENXPLAY_N1_ROOT:-}
+    [ "$(dpkg --print-architecture)" = arm64 ] || fail 'requires Debian arm64'
+    [ -r "$root/etc/os-release" ] || fail 'requires Debian 13 (missing /etc/os-release)'
+    os=$( . "$root/etc/os-release"; printf '%s:%s' "${ID:-}" "${VERSION_ID:-}" )
+    [ "$os" = debian:13 ] || fail "requires Debian 13; found $os"
+    model=$(tr -d '\000' < "$root/proc/device-tree/model" 2>/dev/null) || model=
+    [ "$model" = 'Phicomm N1' ] || fail "requires device-tree model Phicomm N1; found ${model:-unknown}"
+    ;;
+esac
+exit 0

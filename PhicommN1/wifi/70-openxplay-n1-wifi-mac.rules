@@ -1,0 +1,4 @@
+# SPDX-FileCopyrightText: 2026 OpenXPlay.org
+# SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
+# Created by riko chen on 2026-10-21
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="wlan[0-9]*", DRIVERS=="brcmfmac", RUN+="/usr/lib/openxplay-phicomm-n1/wifi-mac $name"
