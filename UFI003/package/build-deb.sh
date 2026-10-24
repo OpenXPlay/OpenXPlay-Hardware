@@ -16,7 +16,7 @@ ufi=$(dirname "$here")
 repo=$(dirname "$ufi")
 krel=5.15.0-handsomekernel+
 fail() { echo "Error: $*" >&2; exit 1; }
-version=0.2.0
+version=0.2.1
 inside=false
 while [ "$#" -gt 1 ]; do
     case "$1" in

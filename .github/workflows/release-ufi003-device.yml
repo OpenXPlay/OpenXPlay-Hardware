@@ -49,6 +49,10 @@ jobs:
         run: |
           . UFI003/package/release-common.sh
           ufi003_fetch_debs UFI003/install/debs.txt "$RUNNER_TEMP/debs"
+      - name: Test bundle metadata before release (offline)
+        run: |
+          python3 UFI003/package/tests/release-test.py
+          python3 UFI003/package/tests/bundle-test.py
       - name: Build bundle
         env:
           DEBVERSION: ${{ steps.version.outputs.debversion }}

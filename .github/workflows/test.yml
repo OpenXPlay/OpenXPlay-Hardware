@@ -34,6 +34,8 @@ jobs:
         run: find . -name '*.sh' -not -path './.git/*' -print0 | xargs -0 -n 1 sh -n
       - name: Test device release logic (offline)
         run: python3 UFI003/package/tests/release-test.py
+      - name: Test UFI003 bundle metadata (offline)
+        run: python3 UFI003/package/tests/bundle-test.py
       - name: Test device profiles
         run: |
           python3 UFI003/package/tests/profile-test.py

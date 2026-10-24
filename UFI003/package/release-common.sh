@@ -140,6 +140,15 @@ device_check_bundle() (
         length == 1 and (.[0] |
             .schema == "org.openxplay.flash-stage/1" and
             .stage == "device" and .device == $device and .version == $version and
+            (.packages | type == "array" and length > 0) and
+            all(.packages[];
+                (.name | type == "string" and test("^[a-z0-9][a-z0-9+.-]+$")) and
+                (.version | type == "string" and test("^[0-9][0-9A-Za-z.+:~_-]*$")) and
+                (.file | type == "string" and test("^debs/[a-z0-9][A-Za-z0-9.+:~_-]*\\.deb$")) and
+                (.sha256 | type == "string" and test("^[0-9a-f]{64}$"))) and
+            (.packages | length == (map(.name) | unique | length)) and
+            (.packages | length == (map(.file) | unique | length)) and
+            any(.packages[]; .name == ("openxplay-" + $device) and .version == $version) and
             (if $device == "phicomm-n1" then
                 .transport == "ssh" and .requires.debianVersion == "13" and
                 .requires.deviceTreeModel == "Phicomm N1" and .requires.dpkgArchitecture == "arm64" and
@@ -147,6 +156,22 @@ device_check_bundle() (
              else true end))
         ' "$root/manifest.json" >/dev/null || ufi003_release_fail 'Invalid bundle manifest or version'
     (cd "$root" && sha256sum -c SHA256SUMS) || ufi003_release_fail 'Bundle SHA256SUMS check failed'
+    jq -r '.packages[] | [.name, .version, .file, .sha256] | @tsv' "$root/manifest.json" > "$work/packages"
+    tab=$(printf '\t')
+    while IFS="$tab" read -r pkg ver file digest; do
+        deb=$root/$file
+        [ -f "$deb" ] && [ ! -L "$deb" ] || ufi003_release_fail "Missing manifest package: $file"
+        [ "$(sha256sum "$deb" | cut -d' ' -f1)" = "$digest" ] ||
+            ufi003_release_fail "Manifest package SHA-256 mismatch: $file"
+        [ "$(dpkg-deb -f "$deb" Package)" = "$pkg" ] && [ "$(dpkg-deb -f "$deb" Version)" = "$ver" ] ||
+            ufi003_release_fail "Manifest does not match Debian control metadata: $file"
+        case "$(dpkg-deb -f "$deb" Architecture)" in
+            arm64|all) ;;
+            *) ufi003_release_fail "Unsupported manifest package architecture: $file" ;;
+        esac
+    done < "$work/packages"
+    [ "$(find "$root/debs" -type f -name '*.deb' | wc -l)" -eq "$(wc -l < "$work/packages")" ] ||
+        ufi003_release_fail 'Bundle contains an unlisted Debian package'
     printf 'PASS %s\n' "$name.tar.gz"
 )
 
