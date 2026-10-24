@@ -17,6 +17,9 @@ import textwrap
 
 sys.dont_write_bytecode = True
 helper = Path(__file__).resolve().parents[1] / "release-common.sh"
+fixture_lib = helper.parents[2] / "PhicommN1/package/tests"
+sys.path.insert(0, str(fixture_lib))
+from fixtures import deb
 checks = 0
 
 
@@ -64,12 +67,19 @@ with tempfile.TemporaryDirectory(prefix="ufi003 release ") as tmp:
     version = "0.2.0~beta.1"
     name = "openxplay-ufi003-device-" + version
     bundle = root / (name + ".tar.gz")
-    manifest = {"schema": "org.openxplay.flash-stage/1", "stage": "device", "device": "ufi003", "version": version}
+    package_path = f"debs/openxplay-ufi003_{version}_arm64.deb"
+    deb(root / "fixture.deb", "openxplay-ufi003", version, "arm64")
+    package_bytes = (root / "fixture.deb").read_bytes()
+    package = {"name": "openxplay-ufi003", "version": version, "file": package_path,
+               "sha256": hashlib.sha256(package_bytes).hexdigest()}
+    manifest = {"schema": "org.openxplay.flash-stage/1", "stage": "device", "device": "ufi003", "version": version,
+                "packages": [package]}
 
     def archive(changed_manifest=None, corrupt=False, extra=(), raw_manifest=None):
         files = {
             "manifest.json": raw_manifest if raw_manifest is not None else json.dumps(changed_manifest or manifest).encode(),
             "SOURCES.txt": b"fixture sources\n",
+            package_path: package_bytes,
         }
         sums = "".join(hashlib.sha256(data).hexdigest() + "  " + path + "\n" for path, data in files.items())
         files["SHA256SUMS"] = sums.encode()
@@ -99,6 +109,25 @@ with tempfile.TemporaryDirectory(prefix="ufi003 release ") as tmp:
     for raw_manifest in (b"{bad", json.dumps(manifest).encode() * 2):
         archive(raw_manifest=raw_manifest)
         run(check_command, version, root, ok=False, error="Invalid bundle manifest")
+    # Reject the previously published empty fields even when all archive checksums are valid.
+    for bad_packages in (None, [], [{**package, "name": ""}], [{**package, "version": ""}],
+                         [{**package, "sha256": ""}], [{**package, "file": "../outside.deb"}],
+                         [package, package]):
+        archive(changed_manifest={**manifest, "packages": bad_packages})
+        run(check_command, version, root, ok=False, error="Invalid bundle manifest")
+    archive(changed_manifest={**manifest, "packages": [{**package, "sha256": "0" * 64}]})
+    run(check_command, version, root, ok=False, error="Manifest package SHA-256 mismatch")
+    for bad_name, bad_version, bad_arch in (("wrong-package", version, "arm64"),
+                                           ("openxplay-ufi003", "9.9.9", "arm64"),
+                                           ("openxplay-ufi003", version, "amd64")):
+        deb(root / "fixture.deb", bad_name, bad_version, bad_arch)
+        package_bytes = (root / "fixture.deb").read_bytes()
+        archive(changed_manifest={**manifest, "packages": [
+            {**package, "sha256": hashlib.sha256(package_bytes).hexdigest()}]})
+        run(check_command, version, root, ok=False,
+            error="architecture" if bad_arch == "amd64" else "control metadata")
+    deb(root / "fixture.deb", "openxplay-ufi003", version, "arm64")
+    package_bytes = (root / "fixture.deb").read_bytes()
     for extra in ("another-top/file", name + "/../escape"):
         archive(extra=(extra,))
         run(check_command, version, root, ok=False)
@@ -200,6 +229,11 @@ with tempfile.TemporaryDirectory(prefix="n1 release ") as tmp:
     manifest = {"schema": "org.openxplay.flash-stage/1", "stage": "device", "device": "phicomm-n1",
                 "version": version, "transport": "ssh", "requires": {"debianVersion": "13",
                 "deviceTreeModel": "Phicomm N1", "dpkgArchitecture": "arm64"}}
+    package_path = f"debs/openxplay-phicomm-n1_{version}_all.deb"
+    deb(root / "fixture.deb", "openxplay-phicomm-n1", version, "all")
+    package_bytes = (root / "fixture.deb").read_bytes()
+    manifest["packages"] = [{"name": "openxplay-phicomm-n1", "version": version, "file": package_path,
+                             "sha256": hashlib.sha256(package_bytes).hexdigest()}]
     # archive() closes over the current bundle/name/manifest, sharing the UFI003 corruption cases.
     archive()
     run('device_check_bundle phicomm-n1 "$@"', version, root)

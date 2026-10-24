@@ -17,7 +17,7 @@ here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ufi=$(dirname "$here")
 repo=$(dirname "$ufi")
 fail() { echo "Error: $*" >&2; exit 1; }
-version=0.2.0
+version=0.2.1
 sources=
 while [ "$#" -gt 2 ]; do
     case "$1" in
@@ -27,6 +27,7 @@ while [ "$#" -gt 2 ]; do
     esac
 done
 [ "$#" -eq 2 ] || fail "Usage: $0 [--version VERSION] [--sources DIR] DEBS_DIR OUTPUT_DIR"
+case "$version" in ''|*[!0-9A-Za-z.+~-]*|[!0-9]*) fail "Invalid Debian version: $version" ;; esac
 debs=$(CDPATH= cd -- "$1" && pwd)
 mkdir -p "$2"
 out=$(CDPATH= cd -- "$2" && pwd)
@@ -35,12 +36,26 @@ if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
 fi
 export SOURCE_DATE_EPOCH
 sum() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
-# Reads one control field without dpkg (macOS has ar and a tar that reads xz/gz/zst members).
-field() {
-    member=$(ar t "$1" | grep '^control\.tar')
-    ar p "$1" "$member" | tar -xOf - ./control | awk -v f="$2" '
-        index($0, f ": ") == 1 { print substr($0, length(f) + 3); exit }'
-}
+# Prefer the Debian parser on Linux. Without dpkg (macOS), give tar a named archive so it can
+# detect compression: GNU tar cannot auto-decompress a control.tar.xz arriving on stdin. Keep
+# every extraction step separate, since a trailing awk would otherwise hide a failed tar.
+field() (
+    if command -v dpkg-deb >/dev/null 2>&1; then
+        dpkg-deb -f "$1" "$2" || fail "Cannot read Debian control metadata: $1"
+        exit
+    fi
+    control_work=$(mktemp -d)
+    trap 'rm -rf "$control_work"' 0
+    trap 'exit 1' HUP INT TERM
+    ar t "$1" > "$control_work/members" || fail "Cannot list Debian archive: $1"
+    member=$(sed 's#/$##' "$control_work/members" | grep '^control\.tar\(\.[a-z0-9]*\)\?$') ||
+        fail "Missing Debian control archive: $1"
+    [ "$(printf '%s\n' "$member" | wc -l)" -eq 1 ] || fail "Ambiguous Debian control archive: $1"
+    ar p "$1" "$member" > "$control_work/$member" || fail "Cannot read Debian control archive: $1"
+    tar -xOf "$control_work/$member" ./control > "$control_work/control" ||
+        fail "Cannot extract Debian control metadata: $1"
+    awk -v f="$2" 'index($0, f ": ") == 1 { print substr($0, length(f) + 3); exit }' "$control_work/control"
+)
 name=openxplay-ufi003-device-$version
 stage=$(mktemp -d "$out/.$name.XXXXXX")
 trap 'rm -rf "$stage"' 0
@@ -55,9 +70,15 @@ while read -r pkg ver digest extra; do
     f=$debs/${pkg}_${ver}_${arch}.deb
     [ -f "$f" ] || fail "Missing $f"
     [ "$(sum "$f")" = "$digest" ] || fail "SHA-256 mismatch: $f"
+    [ "$(field "$f" Package)" = "$pkg" ] && [ "$(field "$f" Version)" = "$ver" ] &&
+        [ "$(field "$f" Architecture)" = "$arch" ] || fail "Control metadata does not match pin: $f"
     cp "$f" "$root/debs/"
 done < "$ufi/install/debs.txt"
 sh "$here/build-deb.sh" --version "$version" "$root/debs" >&2
+device=$root/debs/openxplay-ufi003_${version}_arm64.deb
+[ -f "$device" ] && [ "$(field "$device" Package)" = openxplay-ufi003 ] &&
+    [ "$(field "$device" Version)" = "$version" ] && [ "$(field "$device" Architecture)" = arm64 ] ||
+    fail 'Invalid generated device package control metadata'
 cp "$here/install-device.sh" "$root/install-device.sh"
 chmod 0755 "$root/install-device.sh"
 
@@ -112,8 +133,13 @@ json() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
     printf '  "packages": [\n'
     sep=
     for f in "$root"/debs/*.deb; do
+        pkg=$(field "$f" Package) || fail "Cannot read package name: $f"
+        ver=$(field "$f" Version) || fail "Cannot read package version: $f"
+        printf '%s\n' "$pkg" | grep -Eq '^[a-z0-9][a-z0-9+.-]+$' &&
+            printf '%s\n' "$ver" | grep -Eq '^[0-9][0-9A-Za-z.+:~_-]*$' ||
+            fail "Invalid Debian package entry: $f"
         printf '%s    {"name": "%s", "version": "%s", "file": "debs/%s", "sha256": "%s"}' \
-            "$sep" "$(json "$(field "$f" Package)")" "$(json "$(field "$f" Version)")" \
+            "$sep" "$(json "$pkg")" "$(json "$ver")" \
             "$(basename "$f")" "$(sum "$f")"
         sep=',
 '
