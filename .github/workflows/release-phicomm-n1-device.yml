@@ -49,11 +49,15 @@ jobs:
         run: |
           . UFI003/package/release-common.sh
           phicomm_n1_fetch_debs PhicommN1/install/debs.txt "$RUNNER_TEMP/debs"
+      - name: Fetch and verify pinned firmware
+        run: |
+          . UFI003/package/release-common.sh
+          phicomm_n1_fetch_firmware PhicommN1/install/firmware.txt "$RUNNER_TEMP/firmware"
       - name: Build bundle
         env:
           DEBVERSION: ${{ steps.version.outputs.debversion }}
         run: |
-          sh PhicommN1/package/build-bundle.sh --version "$DEBVERSION" "$RUNNER_TEMP/debs" "$RUNNER_TEMP/dist"
+          sh PhicommN1/package/build-bundle.sh --version "$DEBVERSION" --firmware "$RUNNER_TEMP/firmware" "$RUNNER_TEMP/debs" "$RUNNER_TEMP/dist"
       - name: Check bundle and checksum release files
         env:
           DEBVERSION: ${{ steps.version.outputs.debversion }}
@@ -108,6 +112,7 @@ jobs:
             printf '\nBuilt from OpenXPlay-Hardware@%s\n\n' "$(git rev-parse HEAD)"
             printf -- '- `%s`\n' "$asset" SHA256SUMS
             printf '\nThe bundle carries unmodified Debian 13 packages whose sources are named in SOURCES.txt. OpenXPlay-Hardware is under the OpenXPlay-Hardware License 1.0 (no commercial use).\n'
+            printf '\nThe device package carries unmodified Cypress Wi-Fi firmware from linux-firmware under LICENCE.cypress.\n'
           } > "$notes"
           cd "$RUNNER_TEMP/release"
           sha256sum -c SHA256SUMS || { echo '::error::Release artifact checksum mismatch'; exit 1; }

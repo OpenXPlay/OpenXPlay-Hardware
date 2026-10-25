@@ -164,6 +164,10 @@ elif "/mr/binary/" in url:
         {"architecture": os.environ.get("FETCH_ARCH", "arm64"), "hash": "b" * 40}]}))
 elif url == "https://snapshot.debian.org/file/" + "b" * 40:
     out.write_bytes(data)
+elif url.startswith("https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/"):
+    if mode == "firmware-fail":
+        sys.exit(22)
+    out.write_bytes(data)
 else:
     sys.exit(99)
 ''')
@@ -297,6 +301,48 @@ print(fields(sys.argv[2]).get(sys.argv[3], ""))
     pins.write_text("bad 1 placeholder\n")
     run('phicomm_n1_fetch_debs "$@"', pins, debs, env=env, ok=False, error="Invalid debs.txt row")
 
+    firmware_pins = root / "firmware.txt"
+    firmware = root / "firmware"
+    fetch_firmware = 'phicomm_n1_fetch_firmware "$@"'
+    firmware_env = {**env, "FETCH_MODE": "firmware", "FETCH_DATA": "test-only firmware bytes"}
+    digest = hashlib.sha256(firmware_env["FETCH_DATA"].encode()).hexdigest()
+    commit = "a137a09be163c5e3fc6e96ba3bfb9eb328394c34"
+    paths = ("cypress/cyfmac43455-sdio.bin", "cypress/cyfmac43455-sdio.clm_blob", "LICENSES/LICENCE.cypress")
+    firmware_pins.write_text("# linux-firmware commit path sha256\n\n" + "\n".join(
+        f"{commit} {path} {digest}" for path in paths))
+    log.unlink()
+    run(fetch_firmware, firmware_pins, firmware, env=firmware_env)
+    assert log.read_text().splitlines() == [
+        f"https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/{path}?id={commit}"
+        for path in paths]
+    assert {p.name for p in firmware.iterdir()} == {Path(path).name for path in paths}
+    assert all(p.read_text() == firmware_env["FETCH_DATA"] for p in firmware.iterdir())
+    # Hex is case-insensitive; the URL retains the supplied commit spelling.
+    firmware_pins.write_text(f"{commit.upper()} {paths[0]} {digest.upper()}\n")
+    run(fetch_firmware, firmware_pins, firmware, env=firmware_env)
+    for bad_commit, bad_path, bad_digest, extra in (
+        ("a" * 39, paths[0], digest, ""), ("a" * 41, paths[0], digest, ""),
+        ("g" * 40, paths[0], digest, ""), (commit, paths[0], "f" * 63, ""),
+        (commit, paths[0], "f" * 65, ""), (commit, paths[0], "g" * 64, ""),
+        (commit, paths[0], digest, "unexpected"), (commit, paths[0], "", ""),
+        *((commit, path, digest, "") for path in (
+            "/absolute.bin", "../escape.bin", "cypress/../escape.bin", "cypress/name..bin",
+            "cypress/./file", "cypress/.", ".", "cypress/", "cypress//file", "bad+name.bin",
+            "bad?query", "bad\\name", "bad name.bin")),
+    ):
+        firmware_pins.write_text(f"{bad_commit} {bad_path} {bad_digest} {extra}\n")
+        log.unlink(missing_ok=True)
+        run(fetch_firmware, firmware_pins, firmware, env=firmware_env, ok=False, error="Invalid firmware")
+        assert not log.exists(), "Bad rows must be rejected before curl"
+    firmware_pins.write_text(f"{commit} cypress/same.bin {digest}\n{commit} other/same.bin {digest}\n")
+    run(fetch_firmware, firmware_pins, firmware, env=firmware_env, ok=False, error="Duplicate firmware basename")
+    firmware_pins.write_text(f"{commit} {paths[0]} {digest}\n")
+    run(fetch_firmware, firmware_pins, firmware, env={**firmware_env, "FETCH_CORRUPT": "1"},
+        ok=False, error="SHA-256 mismatch")
+    assert (firmware / Path(paths[0]).name).read_text() == firmware_env["FETCH_DATA"], "Bad download cannot replace verified file"
+    run(fetch_firmware, firmware_pins, firmware, env={**firmware_env, "FETCH_MODE": "firmware-fail"},
+        ok=False, error="Cannot download firmware")
+
 # Inspect both workflows offline, including all shell blocks and prerelease asset naming.
 for device, build_dir, version_fn, fetch_fn, check_fn in (
     ("ufi003", "UFI003", "ufi003_release_version", "ufi003_fetch_debs", "ufi003_check_bundle"),
@@ -315,5 +361,11 @@ for device, build_dir, version_fn, fetch_fn, check_fn in (
     for block in re.findall(r"        run: \|\n((?:          .*\n|\n)+)", workflow):
         subprocess.run(["bash", "-n"], input=textwrap.dedent(block), text=True, check=True)
         checks += 1
+    if device == "phicomm-n1":
+        assert 'phicomm_n1_fetch_firmware PhicommN1/install/firmware.txt "$RUNNER_TEMP/firmware"' in workflow
+        assert '--firmware "$RUNNER_TEMP/firmware"' in workflow
+        assert workflow.index("- name: Fetch and verify pinned firmware") < workflow.index("- name: Build bundle")
+        assert 'unmodified Cypress Wi-Fi firmware from linux-firmware under LICENCE.cypress' in workflow
+        checks += 4
 
 print(f"PASS {checks} offline release cases")

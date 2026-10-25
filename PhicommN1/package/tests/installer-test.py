@@ -14,7 +14,7 @@ import tarfile
 import tempfile
 
 sys.dont_write_bytecode = True
-from fixtures import deb
+from fixtures import deb, firmware, payload
 
 n1 = Path(__file__).resolve().parents[2]
 checks = 0
@@ -37,6 +37,9 @@ with tempfile.TemporaryDirectory(prefix="n1 installer ") as tmp:
     shutil.copyfile(n1.parent / "LICENSE", source.parent / "LICENSE")
     inputs = work / "inputs"
     inputs.mkdir()
+    firmware_dir = work / "firmware"
+    firmware_pins = work / "firmware.txt"
+    firmware_bytes = firmware(firmware_dir, firmware_pins)
     out = work / "out"
     bins = work / "bin"
     bins.mkdir()
@@ -52,8 +55,6 @@ with tempfile.TemporaryDirectory(prefix="n1 installer ") as tmp:
     state.write_text("{}")
     log = work / "commands.jsonl"
     fixture_script = n1 / "package/tests/fixtures.py"
-    # Only the package build is stubbed. The bundle builder reads real ar/control archives.
-    (source / "package/build-deb.sh").write_text('#!/bin/sh\nexec "$FIXTURE_PYTHON" "$FIXTURES" "$2" "$3"\n')
     stub = r'''import json, os, pathlib, re, sys
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.environ["FIXTURE_LIB"])
@@ -156,10 +157,13 @@ else: raise AssertionError(cmd)
         (runtime / cmd).symlink_to(executable)
     env = dict(os.environ, SOURCE_DATE_EPOCH="1792540800", FIXTURE_PYTHON=sys.executable,
                FIXTURES=str(fixture_script), FIXTURE_LIB=str(fixture_script.parent),
+               OPENXPLAY_N1_TEST_FIRMWARE_PINS=str(firmware_pins),
                OPENXPLAY_N1_ROOT=str(root), TEST_LOG=str(log), TEST_STATE=str(state))
 
     def run(script, args=(), code=0, error=None, extra=None, device=False, stderr_lines=()):
         e = {**env, **(extra or {})}
+        if Path(script).name == "build-bundle.sh":
+            args = ["--firmware", firmware_dir, *args]
         if device:
             e["PATH"] = str(bins) + os.pathsep + str(runtime)
         result = subprocess.run(["sh", str(script), *map(str, args)], env=e, text=True,
@@ -174,6 +178,97 @@ else: raise AssertionError(cmd)
             prefix = "OXP-STAGE device " + ("wrong-device:" if code == 2 else "failed:" if code else "")
             check(output.splitlines()[-1].startswith(prefix), output)
         return output
+
+    deb_builder = source / "package/build-deb.sh"
+    rejected = work / "rejected"
+    run(deb_builder, [rejected], code=1, error="--firmware DIR")
+    build_args = ["--firmware", firmware_dir, rejected]
+    # Production pins must reject the tiny fixtures even when every required file exists.
+    run(deb_builder, build_args, code=1, error="SHA-256 mismatch",
+        extra={"OPENXPLAY_N1_TEST_FIRMWARE_PINS": ""})
+    for name, data in firmware_bytes.items():
+        path = firmware_dir / name
+        path.unlink()
+        run(deb_builder, build_args, code=1, error="Missing regular firmware file")
+        path.symlink_to(firmware_pins)
+        run(deb_builder, build_args, code=1, error="Symlink firmware input")
+        path.unlink()
+        path.write_bytes(data + b"corrupt")
+        run(deb_builder, build_args, code=1, error="SHA-256 mismatch")
+        path.write_bytes(data)
+    pin_text = firmware_pins.read_text()
+    for text, error in ((pin_text + " extra", "Invalid firmware.txt row"),
+                        (pin_text + "\n" + pin_text.splitlines()[1], "Duplicate firmware basename"),
+                        ("\n".join(pin_text.splitlines()[:-1]), "Missing firmware pin")):
+        firmware_pins.write_text(text)
+        run(deb_builder, build_args, code=1, error=error)
+    firmware_pins.write_text(pin_text)
+    check(not rejected.exists(), "Invalid firmware never creates an output directory")
+    if shutil.which("dpkg-deb"):
+        run(deb_builder, build_args)
+        device_deb = rejected / "openxplay-phicomm-n1_0.1.0_all.deb"
+        files = payload(device_deb)
+        updates = "usr/lib/firmware/updates/brcm/brcmfmac43455-sdio.phicomm,n1"
+        expected = {updates + ".bin": firmware_bytes["cyfmac43455-sdio.bin"],
+                    updates + ".clm_blob": firmware_bytes["cyfmac43455-sdio.clm_blob"]}
+        check({p for p in files if p.startswith("usr/lib/firmware/")} == set(expected), "Exactly two updates files")
+        check(not any(p.startswith(("lib/firmware/", "usr/lib/firmware/brcm/")) for p in files), "No image firmware paths")
+        for path, data in expected.items():
+            check(files[path] == (data, 0o644), "Firmware bytes and mode: " + path)
+        doc = "usr/share/doc/openxplay-phicomm-n1/"
+        check(files[doc + "LICENCE.cypress"] == (firmware_bytes["LICENCE.cypress"], 0o644), "Firmware licence")
+        copyright = files[doc + "copyright"][0].decode()
+        for value in ("Files: usr/lib/firmware/updates/brcm/*",
+                      "Copyright: Cypress Semiconductor Corporation, an Infineon Technologies company",
+                      "License: LicenseRef-LICENCE.cypress", "cypress/cyfmac43455-sdio.bin",
+                      "cypress/cyfmac43455-sdio.clm_blob", "7.45.286",
+                      "a137a09be163c5e3fc6e96ba3bfb9eb328394c34", "See LICENCE.cypress for the full text"):
+            check(value in copyright, "Firmware copyright: " + value)
+        first_digest = digest(device_deb)
+        run(deb_builder, build_args)
+        check(digest(device_deb) == first_digest, "Reproducible device package")
+    else:
+        print("SKIP N1 native .deb payload: dpkg-deb unavailable (also covered by chroot-test.sh)")
+    # Exercise the macOS tar-stream fallback without a daemon, image, mounts or network.
+    container_tools = work / "container-tools"
+    container_tools.mkdir()
+    for cmd in ("sh", "dirname", "grep", "cut", "tr", "sha256sum", "mkdir", "mktemp", "cp", "tar", "rm"):
+        (container_tools / cmd).symlink_to(shutil.which(cmd))
+    docker = container_tools / "docker"
+    docker.write_text(f"#!{sys.executable}\n" + r'''import io, os, pathlib, sys, tarfile
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.environ["FIXTURE_LIB"])
+from fixtures import deb
+args = sys.argv[1:]
+assert args[:2] == ["run", "-i"] and "--pull=never" in args and "--network=none" in args
+assert "--firmware /work/firmware" in args[-1]
+with tarfile.open(fileobj=io.BytesIO(sys.stdin.buffer.read())) as tar:
+    for name in ("cyfmac43455-sdio.bin", "cyfmac43455-sdio.clm_blob", "LICENCE.cypress"):
+        assert tar.extractfile("firmware/" + name).read() == (pathlib.Path(os.environ["TEST_FIRMWARE"]) / name).read_bytes()
+    assert tar.extractfile("PhicommN1/install/firmware.txt")
+    if os.environ.get("OPENXPLAY_N1_TEST_FIRMWARE_PINS"):
+        assert os.environ["OPENXPLAY_N1_TEST_FIRMWARE_PINS"] == "/work/firmware/test-pins.txt"
+        assert tar.extractfile("firmware/test-pins.txt").read() == pathlib.Path(os.environ["TEST_FIRMWARE_PINS"]).read_bytes()
+    else:
+        assert "firmware/test-pins.txt" not in tar.getnames()
+path = pathlib.Path(os.environ["TEST_CONTAINER_DEB"])
+deb(path, "openxplay-phicomm-n1", "0.1.0", "all")
+with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as tar:
+    tar.add(path, arcname="openxplay-phicomm-n1_0.1.0_all.deb")
+''')
+    docker.chmod(0o755)
+    container_env = {"PATH": str(container_tools), "TEST_FIRMWARE": str(firmware_dir),
+                     "TEST_FIRMWARE_PINS": str(firmware_pins), "TEST_CONTAINER_DEB": str(work / "container.deb")}
+    run(deb_builder, ["--firmware", firmware_dir, work / "container-out"], extra=container_env)
+    production_pins = source / "install/firmware.txt"
+    original_pins = production_pins.read_text()
+    production_pins.write_text(firmware_pins.read_text())
+    run(deb_builder, ["--firmware", firmware_dir, work / "container-out"],
+        extra={**container_env, "OPENXPLAY_N1_TEST_FIRMWARE_PINS": ""})
+    production_pins.write_text(original_pins)
+    # Bundle/installer checks use small real ar/control archives on hosts without dpkg or Docker.
+    deb_builder.write_text('#!/bin/sh\n[ "$3" = --firmware ] && [ -d "$4" ] || exit 1\n'
+                           'exec "$FIXTURE_PYTHON" "$FIXTURES" "$2" "$5"\n')
 
     pins = source / "install/debs.txt"
     rows = []
@@ -215,6 +310,10 @@ else: raise AssertionError(cmd)
     for package in manifest["packages"]:
         check(digest(bundle / package["file"]) == package["sha256"], "Manifest package digest")
     check("runtime-source 1.0" in (bundle / "SOURCES.txt").read_text(), "Source field is used")
+    for row in firmware_pins.read_text().splitlines()[1:]:
+        commit, path, sha256 = row.split()
+        check(f"https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/{path}?id={commit} sha256 {sha256}"
+              in (bundle / "SOURCES.txt").read_text(), "Firmware provenance: " + path)
     check((bundle / "sources/runtime-source_1.0.dsc").is_file() and
           not (bundle / "sources/ignore.txt").exists(), "Optional source archives")
     with tarfile.open(str(bundle) + ".tar.gz") as tar:
