@@ -4,10 +4,40 @@
 # Created by riko chen on 2026-10-21
 """Small real Debian archives for offline bundle tests; no dpkg or Docker required."""
 import gzip
+import hashlib
 import io
 from pathlib import Path
 import sys
 import tarfile
+
+
+def firmware(directory, pins):
+    directory.mkdir()
+    contents = {"cyfmac43455-sdio.bin": b"test-only Wi-Fi firmware\n",
+                "cyfmac43455-sdio.clm_blob": b"test-only CLM\n",
+                "LICENCE.cypress": b"test-only licence\n"}
+    rows = ["# Test-only linux-firmware commit upstream-path sha256"]
+    for name, data in contents.items():
+        (directory / name).write_bytes(data)
+        upstream = ("LICENSES/" if name == "LICENCE.cypress" else "cypress/") + name
+        rows.append(f"{'a' * 40} {upstream} {hashlib.sha256(data).hexdigest()}")
+    pins.write_text("\n".join(rows))  # Exercise a final row without a newline.
+    return contents
+
+
+def payload(path):
+    data = Path(path).read_bytes()
+    assert data[:8] == b"!<arch>\n", path
+    offset = 8
+    while offset < len(data):
+        header = data[offset:offset + 60]
+        size = int(header[48:58])
+        if header[:16].decode().strip().startswith("data.tar"):
+            with tarfile.open(fileobj=io.BytesIO(data[offset + 60:offset + 60 + size])) as tar:
+                return {entry.name.removeprefix("./"): (tar.extractfile(entry).read(), entry.mode)
+                        for entry in tar if entry.isfile()}
+        offset += 60 + size + size % 2
+    raise AssertionError("No data member: " + str(path))
 
 
 def deb(path, name, version, arch, source=None):

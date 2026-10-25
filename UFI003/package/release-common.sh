@@ -218,3 +218,33 @@ phicomm_n1_fetch_debs() (
         mv -f "$part" "$debs/${pkg}_${version#*:}_${arch}.deb"
     done < "$pins"
 )
+
+# Keep the firmware and its redistribution licence pinned to unmodified linux-firmware files.
+phicomm_n1_fetch_firmware() (
+    set -eu
+    pins=$1
+    firmware=$2
+    mkdir -p "$firmware"
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' 0
+    trap 'exit 1' HUP INT TERM
+    seen=' '
+    while read -r commit path digest extra || [ -n "$commit" ]; do
+        case "$commit" in ''|'#'*) continue ;; esac
+        [ -z "$extra" ] && printf '%s\n' "$commit" | LC_ALL=C grep -Eq '^[0-9a-fA-F]{40}$' &&
+            printf '%s\n' "$path" | LC_ALL=C grep -Eq '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' &&
+            printf '%s\n' "$digest" | LC_ALL=C grep -Eq '^[0-9a-fA-F]{64}$' ||
+            ufi003_release_fail "Invalid firmware.txt row: $commit"
+        case "/$path/" in *..*|*/./*) ufi003_release_fail "Invalid firmware path: $path" ;; esac
+        base=${path##*/}
+        case "$seen" in *" $base "*) ufi003_release_fail "Duplicate firmware basename: $base" ;; esac
+        seen="$seen$base "
+        part=$work/firmware
+        ufi003_release_curl --output "$part" \
+            "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/$path?id=$commit" ||
+            ufi003_release_fail "Cannot download firmware: $path"
+        printf '%s  %s\n' "$digest" "$part" | sha256sum -c - ||
+            ufi003_release_fail "SHA-256 mismatch: $path"
+        mv -f "$part" "$firmware/$base"
+    done < "$pins"
+)

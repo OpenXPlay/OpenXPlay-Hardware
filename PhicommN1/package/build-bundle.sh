@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 OpenXPlay.org
 # SPDX-License-Identifier: LicenseRef-OpenXPlay-Hardware-1.0
 # Created by riko chen on 2026-10-21
-# Usage: build-bundle.sh [--version VERSION] [--sources DIR] DEBS_DIR OUTPUT_DIR
+# Usage: build-bundle.sh [--version VERSION] [--sources DIR] --firmware DIR DEBS_DIR OUTPUT_DIR
 # All inputs are local. debs/debs.txt preserves dependency order for the offline installer.
 set -eu
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -11,14 +11,17 @@ repo=$(dirname "$n1")
 fail() { echo "Error: $*" >&2; exit 1; }
 version=0.1.0
 sources=
+firmware=
 while [ "$#" -gt 2 ]; do
     case "$1" in
     --version) version=$2; shift 2 ;;
     --sources) sources=$(CDPATH= cd -- "$2" && pwd); shift 2 ;;
+    --firmware) firmware=$(CDPATH= cd -- "$2" && pwd); shift 2 ;;
     *) fail "Unknown option: $1" ;;
     esac
 done
-[ "$#" -eq 2 ] || fail "Usage: $0 [--version VERSION] [--sources DIR] DEBS_DIR OUTPUT_DIR"
+[ "$#" -eq 2 ] && [ -n "$firmware" ] ||
+    fail "Usage: $0 [--version VERSION] [--sources DIR] --firmware DIR DEBS_DIR OUTPUT_DIR"
 case "$version" in ''|*[!0-9A-Za-z.+~-]*|[!0-9]*) fail "Invalid Debian version: $version" ;; esac
 debs=$(CDPATH= cd -- "$1" && pwd)
 mkdir -p "$2"
@@ -69,7 +72,7 @@ while read -r pkg ver digest extra || [ -n "$pkg" ]; do
     [ -n "$found" ] || fail "Missing pinned .deb: $pkg $ver (arm64 or all)"
     cp -f "$found" "$root/debs/"
 done < "$n1/install/debs.txt"
-sh "$here/build-deb.sh" --version "$version" "$root/debs" >&2
+sh "$here/build-deb.sh" --version "$version" --firmware "$firmware" "$root/debs" >&2
 device=$root/debs/openxplay-phicomm-n1_${version}_all.deb
 # Keep the generated device package last, after all pinned dependencies (including an empty list).
 printf '\nopenxplay-phicomm-n1 %s %s\n' "$version" "$(sum "$device")" >> "$root/debs/debs.txt"
@@ -94,6 +97,14 @@ fi
     done
     echo
     echo 'openxplay-phicomm-n1: https://github.com/OpenXPlay/OpenXPlay-Hardware (PhicommN1/).'
+    echo
+    echo 'Unmodified Cypress Wi-Fi firmware and LICENCE.cypress from linux-firmware:'
+    # Match the builder's test-only fixture pins; production always records the committed list.
+    while read -r commit path digest extra || [ -n "$commit" ]; do
+        case "$commit" in ''|'#'*) continue ;; esac
+        printf 'https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/%s?id=%s sha256 %s\n' \
+            "$path" "$commit" "$digest"
+    done < "${OPENXPLAY_N1_TEST_FIRMWARE_PINS:-$n1/install/firmware.txt}"
 } > "$root/SOURCES.txt"
 json() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 {

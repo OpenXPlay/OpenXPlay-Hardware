@@ -26,12 +26,23 @@ if [ "${1:-}" != --inside ]; then
     work=$(mktemp -d)
     trap 'rm -rf "$work"' 0
     trap 'exit 1' HUP INT TERM
-    sh "$here/../build-deb.sh" "$work/debs"
+    mkdir "$work/firmware"
+    for base in cyfmac43455-sdio.bin cyfmac43455-sdio.clm_blob LICENCE.cypress; do
+        printf 'test-only %s\n' "$base" > "$work/firmware/$base"
+        path=cypress/$base
+        if [ "$base" = LICENCE.cypress ]; then path=LICENSES/$base; fi
+        printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa %s %s\n' "$path" \
+            "$(sha256sum "$work/firmware/$base" | cut -d' ' -f1)" >> "$work/firmware/pins.txt"
+    done
+    OPENXPLAY_N1_TEST_FIRMWARE_PINS=$work/firmware/pins.txt \
+        sh "$here/../build-deb.sh" --firmware "$work/firmware" "$work/debs"
     COPYFILE_DISABLE=1 tar --no-xattrs -cf "$work/test.tar" -C "$repo" LICENSE PhicommN1
-    tar -rf "$work/test.tar" -C "$work" debs
+    COPYFILE_DISABLE=1 tar --no-xattrs -rf "$work/test.tar" -C "$work" debs firmware
     docker run -i --rm --pull=never --network=none --platform linux/arm64 \
         -e OPENXPLAY_N1_CHROOT_TEST=1 debian:trixie \
-        sh -c 'mkdir /work && tar -xf - -C /work && sh /work/PhicommN1/package/tests/chroot-test.sh --inside' < "$work/test.tar"
+        sh -c 'mkdir /work && tar -xf - -C /work &&
+            export OPENXPLAY_N1_TEST_FIRMWARE_PINS=/work/firmware/pins.txt &&
+            sh /work/PhicommN1/package/tests/chroot-test.sh --inside' < "$work/test.tar"
     exit 0
 fi
 [ "${OPENXPLAY_N1_CHROOT_TEST:-}" = 1 ] && [ -d /work/debs ] || {
@@ -98,7 +109,7 @@ EOF
 deb=$inputs/oxp-test-pinned-runtime_1.0_all.deb
 dpkg-deb --root-owner-group -b /work/pinned-runtime "$deb" >/dev/null
 printf 'oxp-test-pinned-runtime 1.0 %s\n' "$(sha256sum "$deb" | cut -d' ' -f1)" > "$source/PhicommN1/install/debs.txt"
-sh "$source/PhicommN1/package/build-bundle.sh" "$inputs" /work/bundles >/work/bundle.log 2>&1 || {
+sh "$source/PhicommN1/package/build-bundle.sh" --firmware /work/firmware "$inputs" /work/bundles >/work/bundle.log 2>&1 || {
     cat /work/bundle.log; exit 1;
 }
 bundle=/work/bundles/openxplay-phicomm-n1-device-0.1.0
@@ -127,12 +138,37 @@ helper_state() { find /var/lib/systemd -path '*deb-systemd-helper*' \( -name 'op
 units='openxplay-n1-phy-id.service openxplay-n1-phy-id.path openxplay-n1-bt-addr.service'
 check 'container is not booted with systemd' test ! -d /run/systemd/system
 unit_links > /work/units-before
+# Model the image's unowned firmware, which dpkg must never replace or remove.
+image_firmware=/usr/lib/firmware/brcm/brcmfmac43455-sdio.phicomm,n1.bin
+mkdir -p "$(dirname "$image_firmware")"
+printf 'original image firmware\n' > /work/image-firmware
+cp -f /work/image-firmware "$image_firmware"
 dpkg -i /work/debs/openxplay-phicomm-n1_*_all.deb >/work/install.log 2>&1 || { cat /work/install.log; exit 1; }
 check 'package installed' sh -c '[ "$(dpkg-query -W -f="\${Status} \${Version}" openxplay-phicomm-n1)" = "install ok installed 0.1.0" ]'
 check 'package files unmodified' sh -c '[ -z "$(dpkg -V openxplay-phicomm-n1)" ]'
 check 'dpkg audit clean' sh -c '[ -z "$(dpkg --audit)" ]'
 check 'host profile conffile' sh -c 'dpkg-query -W -f="\${Conffiles}" openxplay-phicomm-n1 | grep -q /etc/openxplay/host.json'
 check 'host profile bytes' cmp /etc/openxplay/host.json "$here/../../host.json"
+check 'install preserves image firmware' cmp /work/image-firmware "$image_firmware"
+updates=/usr/lib/firmware/updates/brcm/brcmfmac43455-sdio.phicomm,n1
+for extension in bin clm_blob; do
+    check "firmware bytes: $extension" cmp "$updates.$extension" "/work/firmware/cyfmac43455-sdio.$extension"
+    check "firmware mode: $extension" test "$(stat -c %a "$updates.$extension")" = 644
+done
+printf '%s.bin\n%s.clm_blob\n' "$updates" "$updates" > /work/firmware-expected
+dpkg-query -L openxplay-phicomm-n1 | grep '^/usr/lib/firmware/updates/brcm/.' | sort > /work/firmware-actual
+check 'exactly two updates firmware files' cmp /work/firmware-expected /work/firmware-actual
+check 'package ships no image firmware paths' sh -c '! dpkg-query -L openxplay-phicomm-n1 | grep -E "^/lib/firmware(/|$)|^/usr/lib/firmware/brcm(/|$)"'
+doc=/usr/share/doc/openxplay-phicomm-n1
+check 'Cypress licence bytes' cmp "$doc/LICENCE.cypress" /work/firmware/LICENCE.cypress
+check 'Cypress licence mode' test "$(stat -c %a "$doc/LICENCE.cypress")" = 644
+for text in 'Files: usr/lib/firmware/updates/brcm/*' \
+    'Copyright: Cypress Semiconductor Corporation, an Infineon Technologies company' \
+    'License: LicenseRef-LICENCE.cypress' 'cypress/cyfmac43455-sdio.bin' \
+    'cypress/cyfmac43455-sdio.clm_blob' '7.45.286' 'a137a09be163c5e3fc6e96ba3bfb9eb328394c34' \
+    'See LICENCE.cypress for the full text'; do
+    check "firmware copyright: $text" grep -qF "$text" "$doc/copyright"
+done
 check 'package ships no openxplay-usb-* units' sh -c '! dpkg-query -L openxplay-phicomm-n1 | grep -E "/openxplay-usb-[^/]+$"'
 check 'package ships no serial-getty@ttyGS0 drop-in' sh -c '! dpkg-query -L openxplay-phicomm-n1 | grep -F "/serial-getty@ttyGS0.service.d"'
 for program in phy-id wifi-mac bt-addr; do
@@ -157,7 +193,7 @@ check 'mode 0644: Wi-Fi udev rule' test "$(stat -c %a "$rule")" = 644
 check 'Wi-Fi udev rule bytes' cmp "$rule" "$here/../../wifi/70-openxplay-n1-wifi-mac.rules"
 check 'image install does not run PHY apply' test ! -e "$fixture/run/lock/openxplay-n1-phy-id.lock"
 check 'configure message printed once' test "$(grep -cFx \
-    'openxplay-phicomm-n1: the Ethernet PHY fix and the per-device Wi-Fi and Bluetooth addresses take effect at the next boot.' /work/install.log)" -eq 1
+    'openxplay-phicomm-n1: the Ethernet PHY fix, Wi-Fi firmware and per-device Wi-Fi and Bluetooth addresses take effect at the next boot.' /work/install.log)" -eq 1
 /usr/lib/openxplay-phicomm-n1/phy-id status > /work/phy-status || fail 'PHY status failed in container'
 check 'container PHY status is unsupported' grep -qx 'unsupported .*' /work/phy-status
 helper_state > /work/helper-state
@@ -232,6 +268,9 @@ runtime_is() {
 }
 check 'remove stops watcher and reloads systemd' runtime_is /work/remove-expected
 check 'package license removed' test ! -e /usr/share/doc/openxplay-phicomm-n1/LICENSE
+check 'Cypress licence removed' test ! -e "$doc/LICENCE.cypress"
+check 'remove preserves image firmware' cmp /work/image-firmware "$image_firmware"
+for extension in bin clm_blob; do check "remove deletes updates firmware: $extension" test ! -e "$updates.$extension"; done
 check 'conffile kept on remove' test -f /etc/openxplay/host.json
 check 'state kept until purge' test -f /var/lib/openxplay-phicomm-n1/purge-marker
 for unit in $units; do check "helper masks removed unit: $unit" test "$(readlink "/etc/systemd/system/$unit")" = /dev/null; done
@@ -244,6 +283,7 @@ PATH="/work/bin:$PATH" dpkg --purge openxplay-phicomm-n1 > /work/purge.log 2>&1 
 printf 'systemctl --system daemon-reload\n' > /work/purge-expected
 check 'purge reloads systemd' runtime_is /work/purge-expected
 check 'conffile removed on purge' test ! -e /etc/openxplay/host.json
+check 'purge preserves image firmware' cmp /work/image-firmware "$image_firmware"
 check 'package state removed on purge' test ! -e /var/lib/openxplay-phicomm-n1
 helper_state > /work/helper-state
 check 'helper state removed on purge' test ! -s /work/helper-state

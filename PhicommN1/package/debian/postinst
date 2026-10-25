@@ -26,7 +26,7 @@ configure|abort-upgrade|abort-deconfigure|abort-remove)
         deb-systemd-invoke start bluetooth.service >/dev/null || :
     fi
     if [ "$1" = configure ]; then
-        echo 'openxplay-phicomm-n1: the Ethernet PHY fix and the per-device Wi-Fi and Bluetooth addresses take effect at the next boot.'
+        echo 'openxplay-phicomm-n1: the Ethernet PHY fix, Wi-Fi firmware and per-device Wi-Fi and Bluetooth addresses take effect at the next boot.'
     fi
     ;;
 esac
