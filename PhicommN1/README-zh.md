@@ -11,7 +11,7 @@ Created by riko chen on 2026-10-21
 
 ## 安装
 
-从写入 Armbian 到打开 CarPlay 的分步教程见 [openxplay.org/phicomm-n1](https://openxplay.org/phicomm-n1)（英文：[openxplay.org/en/phicomm-n1](https://openxplay.org/en/phicomm-n1)）。
+从写入 Armbian 到打开 CarPlay 的分步教程见 [openxplay.org/zh/phicomm-n1](https://openxplay.org/zh/phicomm-n1)（英文：[openxplay.org/phicomm-n1](https://openxplay.org/phicomm-n1)）。
 
 发布版的标签为 `phicomm-n1-device-vX.Y.Z[-beta.N]`，附带整合包 `openxplay-phicomm-n1-device-<版本>.tar.gz` 和 `SHA256SUMS`。在 N1 上解压整合包，以 root 身份运行其中的安装程序，不需要联网。解压出的文件夹名使用 Debian 版本号，例如 `0.1.1~beta.1`：
 

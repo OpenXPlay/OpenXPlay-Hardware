@@ -11,7 +11,7 @@ Support files for the Phicomm N1 TV box (Amlogic S905D) running ophub Armbian (D
 
 ## Install
 
-The step-by-step guide, from writing Armbian to opening CarPlay, is at [openxplay.org/en/phicomm-n1](https://openxplay.org/en/phicomm-n1) (Chinese: [openxplay.org/phicomm-n1](https://openxplay.org/phicomm-n1)).
+The step-by-step guide, from writing Armbian to opening CarPlay, is at [openxplay.org/phicomm-n1](https://openxplay.org/phicomm-n1) (Chinese: [openxplay.org/zh/phicomm-n1](https://openxplay.org/zh/phicomm-n1)).
 
 Releases are tagged `phicomm-n1-device-vX.Y.Z[-beta.N]` and carry the bundle `openxplay-phicomm-n1-device-<version>.tar.gz` with `SHA256SUMS`. On the N1, unpack the bundle and run its installer as root; it needs no network. The unpacked folder uses the Debian version, for example `0.1.1~beta.1`:
 
