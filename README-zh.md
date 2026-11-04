@@ -6,8 +6,8 @@
 
 | 目录 | 设备 | 教程 |
 | --- | --- | --- |
-| [`UFI003`](./UFI003/README-zh.md) | UFI003 msm8916 4G USB 随身 Wi-Fi，使用 OpenStick Debian 11 镜像 | [openxplay.org/ufi003-relay](https://openxplay.org/ufi003-relay) |
-| [`PhicommN1`](./PhicommN1/README-zh.md) | 斐讯 N1 电视盒子（晶晨 S905D），使用 ophub Armbian | [openxplay.org/phicomm-n1](https://openxplay.org/phicomm-n1) |
+| [`UFI003`](./UFI003/README-zh.md) | UFI003 msm8916 4G USB 随身 Wi-Fi，使用 OpenStick Debian 11 镜像 | [openxplay.org/zh/ufi003-relay](https://openxplay.org/zh/ufi003-relay) |
+| [`PhicommN1`](./PhicommN1/README-zh.md) | 斐讯 N1 电视盒子（晶晨 S905D），使用 ophub Armbian | [openxplay.org/zh/phicomm-n1](https://openxplay.org/zh/phicomm-n1) |
 
 ## 参与贡献
 
